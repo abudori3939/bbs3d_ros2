@@ -1,0 +1,3 @@
+[submodule "3d_bbs"]
+	path = 3d_bbs
+	url = https://github.com/KOKIAOKI/3d_bbs.git
