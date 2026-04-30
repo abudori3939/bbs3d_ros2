@@ -66,7 +66,7 @@ git checkout -b step-<番号>-<識別子>
 
 ### 3. ローカルで動作確認
 - ビルドが通ること: `colcon build --packages-select bbs3d_ros2`
-- Step のDoD に動作確認が含まれる場合は、それも実施し PR 本文に結果を貼る。
+- Step の DoD に動作確認が含まれる場合は、それも実施し PR 本文に結果を貼る。
 
 ### 4. 実装計画の checkbox を更新する(同 PR 内)
 進捗とコードの整合を保つため、対応する Step の checkbox 更新は **同じ PR 内**で行う(別 PR に分けない)。
