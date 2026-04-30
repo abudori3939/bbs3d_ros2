@@ -1,48 +1,75 @@
 # bbs3d_ros2
 
-ROS 2 wrapper for [KOKIAOKI/3d_bbs](https://github.com/KOKIAOKI/3d_bbs) — full-search 3D global localization with branch-and-bound on point cloud maps.
+[KOKIAOKI/3d_bbs](https://github.com/KOKIAOKI/3d_bbs) の **ROS 2 ラッパーノード** です。3D-BBS 本体のアルゴリズム・性能・パラメータの詳細は本家のリポジトリを参照してください。
 
-> **Status:** WIP. See [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) for the build-out roadmap and current step.
+> 詳細ドキュメント・論文・テストデータ・ベンチマーク等はすべて本家にあります → **https://github.com/KOKIAOKI/3d_bbs**
 
-## Prerequisites
+> **Status:** WIP。ロードマップと進捗は [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) を参照してください。
+
+## 動機
+本家の `ros2_test_rviz2` は 3D-BBS のデモ実装で、屋外ロボットへ組み込むには手数がかかります。本リポジトリは **屋外ロボットでの実運用** を目的に、
+
+- 入出力のトピック名や Service など **ROS 2 インタフェース部を改変しやすい構造** にする、
+- launch / config / rviz 設定を ROS 2 標準の `share/<pkg>/` 配置に揃えて **アクセスしやすく** する、
+- 1 つの ament パッケージとして clone → `colcon build` で完結する **配布しやすい形** にする、
+
+ことを狙っています。3D-BBS 本体には手を入れず、本家を git submodule として同梱しています。
+
+## 前提
 - Ubuntu 22.04
 - ROS 2 humble
 - CUDA 12.0+
-- Eigen 3.4+ (auto-fetched via submodule recursion)
+- Eigen 3.4+(submodule 経由で取得)
 
-## Install
+## インストール
+
+### 1. **必ず `--recursive` を付けて** clone
+本リポジトリは [KOKIAOKI/3d_bbs](https://github.com/KOKIAOKI/3d_bbs) を git submodule として同梱しています。`--recursive` を忘れると上流ソースがダウンロードされず、後続のビルドが必ず失敗します。
 
 ```bash
-# 1. Clone recursively into your colcon workspace
 cd ~/colcon_ws/src
-git clone --recursive https://github.com/abudori3939/bbs3d_ros2.git
-cd bbs3d_ros2
-[ ! -f 3d_bbs/COLCON_IGNORE ] && touch 3d_bbs/COLCON_IGNORE  # only needed if you forgot --recursive flags
+git clone --recursive git@github.com:abudori3939/bbs3d_ros2.git
+```
 
-# 2. Build & install upstream 3D-BBS into /usr/local (one-time, must repeat after any submodule update)
-cd 3d_bbs && mkdir -p build && cd build
+`--recursive` を付け忘れた場合は、後から以下で submodule を初期化できます:
+
+```bash
+cd ~/colcon_ws/src/bbs3d_ros2
+git submodule update --init --recursive
+```
+
+### 2. 本家 3d_bbs をインストール(初回のみ)
+本ラッパーは本家の `libgpu_bbs3d.so` をリンクする方式です。**先に本家を `sudo make install` してください。** 手順は本家の README に従います。
+
+```bash
+cd ~/colcon_ws/src/bbs3d_ros2/3d_bbs
+mkdir -p build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j
 sudo make install
+```
 
-# 3. Build the ROS 2 wrapper
+> **重要:** `git submodule update` で `3d_bbs/` を更新したときは、必ずこのステップを再実行してください。古いライブラリと新しいヘッダの不整合で実行時エラーになることがあります。
+
+### 3. ラッパーノードを `colcon build`
+ここで初めて本リポジトリ自体をビルドします。
+
+```bash
 cd ~/colcon_ws
 colcon build --packages-select bbs3d_ros2 --cmake-args -DCMAKE_BUILD_TYPE=Release
 source install/setup.bash
 ```
 
-> **Important:** After `git submodule update` (or any change inside `3d_bbs/`), re-run step 2. Skipping this leaves stale headers / `libgpu_bbs3d.so` on your system that may not match the wrapper's expectations.
-
-## Run
+## 実行
 
 ```bash
 ros2 launch bbs3d_ros2 bbs3d_rviz2.launch.py config_file:=/path/to/your/config.yaml
 ```
 
-(Detailed run instructions and topic / service contract land with Step 5 — see the plan.)
+(詳細な実行手順とトピック / Service の I/F 一覧は WIP — Step 5 で更新します。)
 
-## License
-MIT. Built on top of [KOKIAOKI/3d_bbs](https://github.com/KOKIAOKI/3d_bbs) (MIT). Please cite the original paper if you use this in research:
+## ライセンス
+MIT。本家 [KOKIAOKI/3d_bbs](https://github.com/KOKIAOKI/3d_bbs)(MIT)に基づきます。研究利用の際は元論文を引用してください:
 
 ```
 @inproceedings{aoki20243dbbs,
