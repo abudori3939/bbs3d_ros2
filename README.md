@@ -56,9 +56,11 @@ sudo make install
 
 ```bash
 cd ~/colcon_ws
-colcon build --packages-select bbs3d_ros2 --cmake-args -DCMAKE_BUILD_TYPE=Release
+colcon build --packages-select bbs3d_ros2
 source install/setup.bash
 ```
+
+> ビルドタイプは `CMakeLists.txt` で Release をデフォルトにしています。デバッグ目的で切り替えたい場合は `--cmake-args -DCMAKE_BUILD_TYPE=Debug`(または `RelWithDebInfo`)を付けてください。
 
 ## 実行
 

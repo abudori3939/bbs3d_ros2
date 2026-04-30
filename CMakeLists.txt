@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.14)
 project(bbs3d_ros2)
 
+# Default to Release: 3D-BBS is performance-critical and PCL/Eigen rely on
+# -DNDEBUG for assert removal. Override with -DCMAKE_BUILD_TYPE=Debug etc.
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+
 if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 17)
 endif()

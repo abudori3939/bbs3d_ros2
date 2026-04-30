@@ -31,7 +31,7 @@ cmake .. -DCMAKE_BUILD_TYPE=Release && make -j && sudo make install
 
 # ラッパーのビルド
 cd ~/colcon_ws
-colcon build --packages-select bbs3d_ros2 --cmake-args -DCMAKE_BUILD_TYPE=Release
+colcon build --packages-select bbs3d_ros2  # Release is the default in CMakeLists.txt
 source install/setup.bash
 ros2 launch bbs3d_ros2 bbs3d_rviz2.launch.py
 ```

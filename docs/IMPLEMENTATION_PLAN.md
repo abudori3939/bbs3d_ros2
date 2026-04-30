@@ -128,7 +128,7 @@ bbs3d_ros2/
 - DoD: クリーンな Ubuntu 22.04 上で `bash scripts/setup.sh && colcon build --packages-select bbs3d_ros2` が通る。
 
 ### Step 7 — エンドツーエンド動作確認  🟡 未着手
-- [ ] `-DCMAKE_BUILD_TYPE=Release` で colcon build をクリーンに通す。
+- [ ] `colcon build --packages-select bbs3d_ros2` をクリーンに通す(`CMakeLists.txt` で Release がデフォルト)。
 - [ ] 上流 test data を使って `ros2 launch bbs3d_ros2 bbs3d_rviz2.launch.py` を起動し、`[ROS2] 3D-BBS initialized` を確認する。
 - [ ] `ros2 service call /bbs3d_ros2_node/localize std_srvs/srv/Trigger {}` で `/global_pose`、`/src_points_on_global_pose`、`/score`、`/time` が上流挙動と一致して出力されることを確認する。
 - [ ] `/click_loc` Bool 後方互換経路でも同じ結果が得られることを確認する。
