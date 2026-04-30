@@ -2,6 +2,8 @@
 
 このドキュメントは `bbs3d_ros2` の構築作業の唯一の真実 (source of truth) です。前提知識のないセッション(別の Claude セッションを含む)が、最初の未完了項目から作業を再開できることを意図して書かれています。
 
+> **開発フローのルールは [`DEVELOPMENT_WORKFLOW.md`](DEVELOPMENT_WORKFLOW.md) を参照してください。** すべての変更は PR 経由で main にマージし、各 Step の checkbox 更新もその PR 内で行います。
+
 ## 目的
 [KOKIAOKI/3d_bbs](https://github.com/KOKIAOKI/3d_bbs) のグローバル位置推定を単一の ament パッケージとしてラップする ROS 2 ノード。配布モデル:
 
