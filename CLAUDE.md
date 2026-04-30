@@ -7,10 +7,13 @@
 上流 `3d_bbs` は `./3d_bbs/` に git submodule として配置し、`COLCON_IGNORE` を置いて colcon が走査しないようにしている。ユーザは初回のみ `cd 3d_bbs && cmake .. && make && sudo make install` を実行し、`libgpu_bbs3d.so` と `gpu_bbs3d` / `pointcloud_iof` / `discrete_transformation` のヘッダを `/usr/local` 以下に配置する。本パッケージの `cmake/Findgpu_bbs3d.cmake` がそれを解決して `find_package(gpu_bbs3d)` が成立する。本ラッパーは **CUDA を再コンパイルしない** — `libgpu_bbs3d.so` をリンクし、ヘッダを include するだけ。
 
 ## どこから読むか
-**まず [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) を読むこと。** Step 0〜7 の計画(checkbox 付き)、設計判断、移植元の上流ファイルへのポインタを含む唯一の作業台帳。最初の未完了 step から再開する。
+1. **[`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)** — Step 0〜7 の計画(checkbox 付き)、設計判断、移植元の上流ファイルへのポインタを含む唯一の作業台帳。最初の未完了 step から再開する。
+2. **[`docs/DEVELOPMENT_WORKFLOW.md`](docs/DEVELOPMENT_WORKFLOW.md)** — ブランチ運用 / PR / レビュー / マージのルール。**コード変更を始める前に必ず一読**。
 
 ## 規約
 - ユーザとの会話は **日本語** で行う。
+- **すべての変更は PR 経由で main にマージする**(直接 push 禁止)。1 Step = 1 ブランチ = 1 PR を原則とする。詳細は [`docs/DEVELOPMENT_WORKFLOW.md`](docs/DEVELOPMENT_WORKFLOW.md) を参照。
+- **ROS 2 ノードの機能追加は TDD で進める**:RED(失敗テスト)→ ユーザ承認 → GREEN(最小実装)→ ユーザ承認 → PR の順。**ビルドエラーは RED として認められない**(テスト実行に到達した上で意図通り FAIL すること)。
 - **`3d_bbs/` 以下は触らない** — これは上流 submodule。ラッパーコードはリポジトリルート (`include/`、`src/`、`launch/`、`config/`、`rviz/`) に置く。
 - `package.xml` の name は `bbs3d_ros2`(REP 144 で先頭数字が禁止されているため)。GitHub リポジトリ名は別でも可。
 - 装飾的なコメントや先回りした抽象化は書かない。基本は上流挙動を維持し、計画に明記された差分のみを入れる。
