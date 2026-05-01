@@ -1,14 +1,14 @@
 # bbs3d_ros2 runtime configuration.
 #
-# Edit `target_clouds` to point at a directory containing your map .pcd file(s),
-# or pass a different yaml via `ros2 launch bbs3d_ros2 bbs3d_rviz2.launch.py
-# config_file:=/abs/path/to/your.yaml`. Use absolute paths.
+# `target_clouds` MUST be an absolute path to a directory containing your
+# map .pcd file(s). Edit the value below, or pass a different yaml via:
+#   ros2 launch bbs3d_ros2 bbs3d_rviz2.launch.py config_file:=/abs/path/to/your.yaml
 #
 # Schema mirrors upstream 3d_bbs/ros2_test/config/ros2_test.yaml.
 
 ################[Necessary]################
 ## Folder paths
-target_clouds: "your_path/target"
+target_clouds: "/path/to/target"  # <-- replace with your absolute path
 
 ## topic name
 lidar_topic_name: "/livox/points" ## msg type: sensor_msgs/PointCloud2
