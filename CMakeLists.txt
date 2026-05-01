@@ -61,7 +61,9 @@ if(BUILD_TESTING)
   # and package.xml. Re-enable if/when we standardize per-file headers.
 
   find_package(ament_cmake_cpplint REQUIRED)
-  ament_cpplint(${_lint_dirs})
+  # build/include_order misclassifies third-party `.h` headers (PCL, tf2_ros,
+  # yaml-cpp) as C system headers; disable that one filter only.
+  ament_cpplint(${_lint_dirs} FILTERS "-build/include_order")
 
   find_package(ament_cmake_uncrustify REQUIRED)
   ament_uncrustify(${_lint_dirs})
