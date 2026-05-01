@@ -92,18 +92,18 @@ bbs3d_ros2/
 
 > 目標: `ros2_test/rviz2` と同等の動作を、`colcon build` 可能な ament パッケージとして再現する。
 
-### Step 3 — ノード移植  🟡 未着手
+### Step 3 — ノード移植  ✅ 完了
 **TDD 適用**(機能追加に相当するため)。ただし上流互換が DoD のため、テスト粒度は「上流挙動と等価な I/O が出ること」を検証する integration test 1〜数件で足りる(`launch_testing` 推奨)。
 
-- [ ] `include/bbs3d_ros2/bbs3d_node.hpp`
+- [x] `include/bbs3d_ros2/bbs3d_node.hpp`
   - 上流 `3d_bbs/ros2_test/rviz2/include/ros2_test_rviz2.hpp` をベースに作る。
   - クラス名 `Bbs3dNode`、`namespace bbs3d_ros2` で囲う。
   - **Service ハンドラはまだ追加しない**(Step 7 で追加)。
-- [ ] `src/bbs3d_node.cpp`
+- [x] `src/bbs3d_node.cpp`
   - 上流 `3d_bbs/ros2_test/rviz2/src/gpu_bbs3d_rviz2/gpu_ros2_test_rviz2.cpp` を素直に移植(挙動互換)。クラス名 / namespace のみ書き換える。
   - mutex 保護や IMU バグ修正、ROS 2 パラメータ上書きなど **上流に存在しない振る舞い変更は入れない**。
-- [ ] `src/bbs3d_node_main.cpp` — 薄い `rclcpp::init` + `spin(std::make_shared<Bbs3dNode>())`。
-- [ ] `CMakeLists.txt` — executable target を追加:
+- [x] `src/bbs3d_node_main.cpp` — 薄い `rclcpp::init` + `spin(std::make_shared<Bbs3dNode>())`。
+- [x] `CMakeLists.txt` — executable target を追加:
   ```cmake
   find_package(CUDA REQUIRED)
   find_package(gpu_bbs3d REQUIRED)
