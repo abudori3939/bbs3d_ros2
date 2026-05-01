@@ -189,8 +189,9 @@ launch / rviz / config 設定のみの変更。TDD 対象外。
   - PCD パスを絶対パスに展開してログ出力(どこを読みに行ったか)。
   - パス存在チェック、PCD ファイル件数、合計点数、所要時間を INFO で出力。
   - 失敗時(パス不在、ファイル 0 件、読み込みエラー)は ERROR を出してノードを正しく終了させる(あるいは fatal とする)。
-- [ ] ランタイム警告:
-  - 5 秒タイマで `lidar_topic_name` / `imu_topic_name` 未受信を `RCLCPP_WARN_THROTTLE` で通知。
+- [ ] ランタイム警告(global localization はトリガー駆動なので、**平常時は静かに**、トリガー時にだけ状態を点検する):
+  - lidar / imu の最終受信時刻を保持しておく。
+  - **トリガー(`/click_loc` または `~/localize`)受信時** に最終受信時刻をチェックし、いずれかが **3 秒以上前**(未受信を含む)であれば `RCLCPP_WARN` を出す(例: `"lidar topic not received for 3.4s — global localization may use stale data"`)。
   - localize 結果の成否理由を構造化ログ(成功時は score / 実行時間、失敗時は reason)。
 - [ ] テスト: 不正な PCD パスを与えたときに ERROR ログが出てノードが正しく終了することを検証。
 - DoD: 起動失敗・ランタイム異常の何が起きたか、ログだけで追える。
