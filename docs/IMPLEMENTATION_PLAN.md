@@ -129,16 +129,16 @@ bbs3d_ros2/
   ```
 - DoD: `colcon build` が `bbs3d_ros2_node` を生成し、`ros2 run bbs3d_ros2 bbs3d_ros2_node --ros-args -p config:=...` で起動して、有効な yaml に対し `[ROS2] 3D-BBS initialized` を表示する。
 
-### Step 4 — launch / config / rviz  🟡 未着手
+### Step 4 — launch / config / rviz  ✅ 完了
 launch / rviz / config 設定のみの変更。TDD 対象外。
 
-- [ ] `launch/bbs3d_rviz2.launch.py`
+- [x] `launch/bbs3d_rviz2.launch.py`
   - `get_package_share_directory('bbs3d_ros2')` で解決する。
   - `DeclareLaunchArgument('config_file', default_value=<share>/config/bbs3d_ros2.yaml)`。
   - 2 ノード: `rviz2`(`-d <share>/rviz/bbs3d.rviz`)と `bbs3d_ros2_node`。
   - **Tk `click_loc` ノードは含めない**。
-- [ ] `config/bbs3d_ros2.yaml` — 上流 `ros2_test/config/ros2_test.yaml` のコピー。`target_clouds: ""` のまま、上書き手段(launch 引数)をコメントで案内。
-- [ ] `rviz/bbs3d.rviz` — 上流 `ros2_test/rviz2/rviz2_config/rviz2.rviz` のコピー。
+- [x] `config/bbs3d_ros2.yaml` — 上流 `ros2_test/config/ros2_test.yaml` のコピー。`target_clouds: "your_path/target"` のまま、上書き手段(launch 引数 `config_file:=`)をコメントで案内。
+- [x] `rviz/bbs3d.rviz` — 上流 `ros2_test/rviz2/rviz2_config/rviz2.rviz` のコピー。
 - DoD: `ros2 launch bbs3d_ros2 bbs3d_rviz2.launch.py` で上流デモと同じ Display 構成の RViz が起動する。
 
 ### Step 5 — README + LICENSE  🟡 未着手
