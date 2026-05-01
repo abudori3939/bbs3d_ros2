@@ -34,7 +34,7 @@ def generate_launch_description():
     bbs3d_node = Node(
         package='bbs3d_ros2',
         executable='bbs3d_ros2_node',
-        output='both',
+        output='screen',
         parameters=[{'config': LaunchConfiguration('config_file')}],
     )
 
