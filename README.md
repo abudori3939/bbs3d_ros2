@@ -1,21 +1,18 @@
 # bbs3d_ros2
+ここにgifアニメ（step6以降で反映）
 
-[KOKIAOKI/3d_bbs](https://github.com/KOKIAOKI/3d_bbs) の GPU 全探索グローバル位置推定を、上流 `ros2_test/rviz2` パッケージから移植して colcon build 可能な単一 ament パッケージにした ROS 2 (humble) ノードです。3D-BBS 本体のアルゴリズム・性能・パラメータの詳細は本家のリポジトリを参照してください。
+このROS 2ノードは、[KOKIAOKI/3d_bbs](https://github.com/KOKIAOKI/3d_bbs) の Global Locazalization を、他のROS 2ノードと同じように `colcon build` できるように整理したラッパーノードです。
+本家のテストプログラムの `ros2_test/rviz2` の移植＋ターゲット点群のトピック入力に対応します。
 
-> 詳細ドキュメント・論文・テストデータ・ベンチマーク等はすべて本家にあります → **https://github.com/KOKIAOKI/3d_bbs**
+エレベータによる階層移動や広大な地図を分割して切り替える際に初期位置を与えるノードとして使うことを想定しています。
+3D-BBS 本体のアルゴリズム・性能・パラメータの詳細は本家のリポジトリを参照してください。
 
-> **Status:** WIP。フェーズ A(上流互換移植)が進行中で、フェーズ B(Service トリガ・トピック名 config 化・target 動的入力・エラーハンドリング強化)は未着手です。ロードマップと進捗は [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) を参照してください。
+> [!NOTE]
+> 本家はこちら -> **https://github.com/KOKIAOKI/3d_bbs**
 
-## 動機
-本家の `ros2_test_rviz2` は 3D-BBS のデモ実装で、屋外ロボットへ組み込むには手数がかかります。本リポジトリは **屋外ロボットでの実運用** を目的に、
+> **Status:** 未完成。作業中です。
 
-- 入出力のトピック名や Service など **ROS 2 インタフェース部を改変しやすい構造** にする、
-- launch / config / rviz 設定を ROS 2 標準の `share/<pkg>/` 配置に揃えて **アクセスしやすく** する、
-- 1 つの ament パッケージとして clone → `colcon build` で完結する **配布しやすい形** にする、
-
-ことを狙っています。3D-BBS 本体には手を入れず、本家を git submodule として同梱しています。
-
-## 前提
+## 対応環境
 - Ubuntu 22.04
 - ROS 2 humble
 - CUDA 12.0+
@@ -23,15 +20,13 @@
 - NVIDIA GPU(3D-BBS の voxelmap 構築・探索に必要)
 
 ## インストール
-
-導入は 4 ステップ:**(1) clone → (2) 3d_bbs を sudo make install → (3) テストデータ配置(初回デモ用)→ (4) colcon build**。
-
-### 1. `--recursive` で clone
-本リポジトリは [KOKIAOKI/3d_bbs](https://github.com/KOKIAOKI/3d_bbs) を git submodule として同梱しています。`--recursive` を忘れると上流ソースが取得されず、後続のビルドが必ず失敗します。
+### 1. このリポジトリを `--recursive` で clone
+本リポジトリは [KOKIAOKI/3d_bbs](https://github.com/KOKIAOKI/3d_bbs) を git submodule として同梱しています。
+`--recursive` を忘れると上流ソースが取得されず、後続のビルドが必ず失敗します。
 
 ```bash
 cd ~/colcon_ws/src
-git clone --recursive git@github.com:abudori3939/bbs3d_ros2.git
+git clone --recursive https://github.com/abudori3939/bbs3d_ros2.git
 ```
 
 `--recursive` を付け忘れた場合は、後から以下で submodule を初期化できます:
@@ -42,7 +37,7 @@ git submodule update --init --recursive
 ```
 
 ### 2. 本家 3d_bbs を `sudo make install`(初回のみ、ユーザ手動)
-**本パッケージは 3d_bbs のインストールを支援しません。** ユーザが手動で本家を `sudo make install` し、`/usr/local/lib/libgpu_bbs3d.so` とヘッダを配置してください。本パッケージはそれを `cmake/Findgpu_bbs3d.cmake` 経由で発見してリンクします。
+`3d_bbs` をビルドしインストールします。`3d_bbs` 内で `build` ディレクトリを作りビルドします。 `sudo make install` しインストールします。
 
 ```bash
 cd ~/colcon_ws/src/bbs3d_ros2/3d_bbs
@@ -85,7 +80,7 @@ source install/setup.bash
 
 `config/bbs3d_ros2.yaml` の `target_clouds` を **絶対パス** に書き換えてから実行します(相対パスは cwd 依存で挙動が変わります)。
 
-### Step A: `config/bbs3d_ros2.yaml` の編集
+### Step 1: `config/bbs3d_ros2.yaml` の編集
 ```yaml
 target_clouds: "/home/yourname/colcon_ws/src/bbs3d_ros2/data/target"  # 絶対パス
 ```
@@ -98,9 +93,8 @@ cp ~/colcon_ws/src/bbs3d_ros2/config/bbs3d_ros2.yaml /tmp/my_bbs3d.yaml
 ros2 launch bbs3d_ros2 bbs3d_rviz2.launch.py config_file:=/tmp/my_bbs3d.yaml
 ```
 
-### Step B: 起動
+### Step 2: 起動
 ```bash
-source ~/colcon_ws/install/setup.bash
 ros2 launch bbs3d_ros2 bbs3d_rviz2.launch.py
 ```
 
@@ -108,17 +102,15 @@ ros2 launch bbs3d_ros2 bbs3d_rviz2.launch.py
 - RViz2 ウィンドウ(target_points / global_pose の Display 構成)
 - ノードログに `[ROS2] 3D-BBS initialized`
 
-### Step C: rosbag を再生(別シェル)
+### Step 3: rosbag を再生(別シェル)
 ```bash
-source ~/colcon_ws/install/setup.bash
 ros2 bag play ~/colcon_ws/src/bbs3d_ros2/data/ros2_test_data
 ```
 
 これで `/livox/points`(LiDAR)と `/livox/imu`(IMU)が流れ始めます。
 
-### Step D: グローバル位置推定をトリガ(別シェル)
+### Step 4: グローバル位置推定をトリガ(別シェル)
 ```bash
-source ~/colcon_ws/install/setup.bash
 ros2 topic pub --once /click_loc std_msgs/msg/Bool "{data: true}"
 ```
 
@@ -179,10 +171,6 @@ ros2 topic pub --once /click_loc std_msgs/msg/Bool "{data: true}"
 | ビルドが `find_package(gpu_bbs3d) failed` で失敗 | Step 2(本家 `sudo make install`)が未実行。`/usr/local/lib/libgpu_bbs3d.so` を確認 |
 | `submodule update` 後に動作不安定 | 上流ヘッダだけ新しくなりライブラリが古いまま。Step 2 を再実行 |
 | `/click_loc` を pub しても何も起きない | rosbag 再生中(`/livox/points` `/livox/imu` が流れている)か確認。ノードログに `point cloud msg is not received` / `imu msg is not received` が出ていれば未受信 |
-
-## 開発
-
-開発フロー(ブランチ運用 / TDD / plan mode)は [`docs/DEVELOPMENT_WORKFLOW.md`](docs/DEVELOPMENT_WORKFLOW.md)、進捗台帳は [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) を参照してください。
 
 ## ライセンス
 MIT。詳細は [`LICENSE`](LICENSE) を参照。本家 [KOKIAOKI/3d_bbs](https://github.com/KOKIAOKI/3d_bbs) も MIT ライセンスで、本リポジトリはそれに基づきます。
