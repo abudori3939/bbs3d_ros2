@@ -158,14 +158,18 @@ launch / rviz / config 設定のみの変更。TDD 対象外。
 - [x] README で上流 `KOKIAOKI/3d_bbs` への謝辞 + 元論文の引用を明記。
 - DoD: 初見のユーザが README だけで動作デモまで到達できる。
 
-### Step 6 — エンドツーエンド動作確認(フェーズ A 完了)  🟡 未着手
-動作確認のみ。TDD 対象外。
+### Step 6 — エンドツーエンド動作確認(フェーズ A 完了)  ✅ 完了
+動作確認 + 既存スモークテストへの env var gating 追加(コード変更なので plan mode 対象、ただし TDD は対象外)。
 
-- [ ] `colcon build --packages-select bbs3d_ros2` をクリーンに通す(`CMakeLists.txt` で Release がデフォルト)。
-- [ ] 上流 test data を使って `ros2 launch bbs3d_ros2 bbs3d_rviz2.launch.py` を起動し、`[ROS2] 3D-BBS initialized` を確認する。
-- [ ] `ros2 topic pub --once /click_loc std_msgs/msg/Bool "{data: true}"` で `/global_pose`、`/src_points_on_global_pose`、`/score`、`/time` が上流挙動と一致して出力されることを確認する。
-- [ ] 上流との挙動差分があれば README に明記する。
-- DoD: 上流 `gpu_ros2_test_rviz2_launch.py` のデモと同等の動作が再現できる(フェーズ A 完了)。
+- [x] `colcon build --packages-select bbs3d_ros2` をクリーンに通す(`CMakeLists.txt` で Release がデフォルト)。
+- [x] 上流 test data を使って `ros2 launch bbs3d_ros2 bbs3d_rviz2.launch.py` を起動し、`[ROS2] 3D-BBS initialized` を確認する。**手元実行ログを PR 本文に貼付**。
+- [x] `ros2 topic pub --once /click_loc std_msgs/msg/Bool "{data: true}"` で `/global_pose`、`/src_points_on_global_pose`、`/score`、`/time` が上流挙動と一致して出力されることを確認する。**手元実行ログを PR 本文に貼付**。
+- [x] 上流との挙動差分があれば README に明記する。
+- [x] **`BBS3D_REQUIRE_TEST_DATA=1` env var gating を追加**(PR #4 review 反応の commit):
+  - default(unset): data 未配置で smoke を skip(現状維持、ローカル開発を妨げない)
+  - `=1` セット: data 未配置で smoke を fail(CI / 厳格モード)
+  - 3 シナリオ(data あり + env var、data 無し + env var、data 無し + env var なし)で動作確認
+- DoD: 上流 `gpu_ros2_test_rviz2_launch.py` のデモと同等の動作が再現できる + ローカル実行ログの貼付 + env var gating の動作確認(フェーズ A 完了)。
 
 ---
 
@@ -196,6 +200,7 @@ launch / rviz / config 設定のみの変更。TDD 対象外。
   - **トリガー(`/click_loc` または `~/localize`)受信時** に最終受信時刻をチェックし、いずれかが **3 秒以上前**(未受信を含む)であれば `RCLCPP_WARN` を出す(例: `"lidar topic not received for 3.4s — global localization may use stale data"`)。
   - localize 結果の成否理由を構造化ログ(成功時は score / 実行時間、失敗時は reason)。
 - [ ] テスト: 不正な PCD パスを与えたときに ERROR ログが出てノードが正しく終了することを検証。
+- [ ] **note**: Step 6 で導入した `BBS3D_REQUIRE_TEST_DATA=1` env var gating の動作テスト(3 シナリオ)もこの Step で自動化候補として検討(現状は manual 検証のみ)。
 - DoD: 起動失敗・ランタイム異常の何が起きたか、ログだけで追える。
 
 ### Step 9 — トピック名の config 化  🟡 未着手
