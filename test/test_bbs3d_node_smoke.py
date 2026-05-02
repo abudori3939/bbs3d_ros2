@@ -7,6 +7,9 @@ Verifies that launching ``bbs3d_ros2_node`` with a fixture yaml whose
 
 Skipped when test data (data/target/*.pcd) is not present locally.
 Place test data per 3d_bbs/ros2_test/ros2_test_code.md.
+
+Set ``BBS3D_REQUIRE_TEST_DATA=1`` to fail (instead of skip) when the test
+data is missing -- useful for CI / strict gating.
 """
 import os
 import tempfile
@@ -25,6 +28,9 @@ EXPECTED_LOG = "[ROS2] 3D-BBS initialized"
 LOG_WAIT_TIMEOUT_SEC = 10.0
 
 DATA_AVAILABLE = DATA_DIR.exists() and any(DATA_DIR.glob("*.pcd"))
+REQUIRE_DATA = os.environ.get("BBS3D_REQUIRE_TEST_DATA", "").lower() in (
+    "1", "true", "yes",
+)
 
 
 def _launch_with_node():
@@ -55,6 +61,11 @@ def _launch_empty():
 
 @pytest.mark.launch_test
 def generate_test_description():
+    if not DATA_AVAILABLE and REQUIRE_DATA:
+        raise RuntimeError(
+            f"BBS3D_REQUIRE_TEST_DATA=1 but test data missing at {DATA_DIR}. "
+            "Download per 3d_bbs/ros2_test/ros2_test_code.md."
+        )
     if DATA_AVAILABLE:
         return _launch_with_node()
     return _launch_empty()
@@ -63,10 +74,13 @@ def generate_test_description():
 class TestNodeInit(unittest.TestCase):
     def test_initialized_log_appears(self, proc_output, node, tmp_yaml):
         if not DATA_AVAILABLE:
-            self.skipTest(
+            msg = (
                 f"Test data not found at {DATA_DIR}. "
                 "Download per 3d_bbs/ros2_test/ros2_test_code.md."
             )
+            if REQUIRE_DATA:
+                self.fail(msg + " (BBS3D_REQUIRE_TEST_DATA=1 set)")
+            self.skipTest(msg)
         proc_output.assertWaitFor(
             EXPECTED_LOG,
             process=node,
