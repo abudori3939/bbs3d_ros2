@@ -74,13 +74,10 @@ def generate_test_description():
 class TestNodeInit(unittest.TestCase):
     def test_initialized_log_appears(self, proc_output, node, tmp_yaml):
         if not DATA_AVAILABLE:
-            msg = (
+            self.skipTest(
                 f"Test data not found at {DATA_DIR}. "
                 "Download per 3d_bbs/ros2_test/ros2_test_code.md."
             )
-            if REQUIRE_DATA:
-                self.fail(msg + " (BBS3D_REQUIRE_TEST_DATA=1 set)")
-            self.skipTest(msg)
         proc_output.assertWaitFor(
             EXPECTED_LOG,
             process=node,

@@ -176,7 +176,7 @@ ros2 topic pub --once /click_loc std_msgs/msg/Bool "{data: true}"
 ## Tips
 
 ### CI / 厳格モード: `BBS3D_REQUIRE_TEST_DATA=1`
-スモークテスト(`test/test_bbs3d_node_smoke.py`)はデフォルトで test data 未配置時に **skip** します(ローカル開発を妨げないため)。CI などで「データ未配置をサイレントに通したくない」場面では、環境変数 `BBS3D_REQUIRE_TEST_DATA=1` をセットすると **fail** に切り替わります。
+スモークテスト(`test/test_bbs3d_node_smoke.py`)はデフォルトで test data 未配置時に **skip** します(ローカル開発を妨げないため)。CI などで「データ未配置をサイレントに通したくない」場面では、環境変数 `BBS3D_REQUIRE_TEST_DATA=1` をセットすると **fail** に切り替わります(`true`、`yes` も同義、大小文字不問)。
 
 ```bash
 # ローカル開発(デフォルト): data 無しなら skip
