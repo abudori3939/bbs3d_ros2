@@ -1,7 +1,7 @@
 # bbs3d_ros2
 ここにgifアニメ（step6以降で反映）
 
-このROS 2ノードは、[KOKIAOKI/3d_bbs](https://github.com/KOKIAOKI/3d_bbs) の Global Locazalization を、他のROS 2ノードと同じように `colcon build` できるように整理したラッパーノードです。
+このROS 2ノードは、[KOKIAOKI/3d_bbs](https://github.com/KOKIAOKI/3d_bbs) の Global Localization を、他のROS 2ノードと同じように `colcon build` できるように整理したラッパーノードです。
 本家のテストプログラムの `ros2_test/rviz2` の移植＋ターゲット点群のトピック入力に対応します。
 
 エレベータによる階層移動や広大な地図を分割して切り替える際に初期位置を与えるノードとして使うことを想定しています。
@@ -63,6 +63,7 @@ bbs3d_ros2/
 │       ├── metadata.yaml
 │       └── ros2_test_data.db3
 ```
+デフォルトでは、`data/target/target.pcd` にしています。`data/target` ディレクトリを作成し、この中にpcdファイルを配置してください。指定したディレクトリ内のpcdをすべて読み込む構造をしているため、ファイル名が `target.pcd` である必要はありません。
 
 `/data/` は `.gitignore` 済みのため、git にトラックされません。
 
@@ -116,8 +117,8 @@ ros2 topic pub --once /click_loc std_msgs/msg/Bool "{data: true}"
 
 期待される結果:
 - ノードログに `[Localize] start` → `[Localize] Execution time: ...[msec]` → `[Localize] score: ...`
-- `/global_pose` `/score` `/time` がそれぞれ 1 回 publish される
-- RViz 上で `global_pose`(赤い点群)が target に重なる位置に表示される
+- `/global_pose` 推定したpose(PoseStamped) が1 回 publish される
+- RViz 上で `/src_points_on_global_pose`(赤い点群)が target に重なる位置に表示される
 
 ### 自分の環境で実行する場合
 - `target_clouds` を自前の地図 PCD ディレクトリの絶対パスに書き換える
@@ -130,8 +131,8 @@ ros2 topic pub --once /click_loc std_msgs/msg/Bool "{data: true}"
 | Topic | Type | 用途 |
 |---|---|---|
 | `/click_loc` | `std_msgs/msg/Bool` | `data: true` でグローバル位置推定をトリガ |
-| `<lidar_topic_name>`(default `/livox/points`) | `sensor_msgs/msg/PointCloud2` | source 点群 |
-| `<imu_topic_name>`(default `/livox/imu`) | `sensor_msgs/msg/Imu` | 重力方向アライメント用 |
+| `<lidar_topic_name>`(サンプル `/livox/points`) | `sensor_msgs/msg/PointCloud2` | source 点群 |
+| `<imu_topic_name>`(サンプル `/livox/imu`) | `sensor_msgs/msg/Imu` | 重力方向アライメント用 |
 
 ### Publications
 | Topic | Type | 用途 |
@@ -170,7 +171,7 @@ ros2 topic pub --once /click_loc std_msgs/msg/Bool "{data: true}"
 | `[ERROR] Can not open folder` の直後に segfault | `target_clouds` がプレースホルダ(`/path/to/target`)のまま、または存在しないパス。**絶対パス**を指定すること。フェーズ B(Step 8)で graceful error に改善予定 |
 | ビルドが `find_package(gpu_bbs3d) failed` で失敗 | Step 2(本家 `sudo make install`)が未実行。`/usr/local/lib/libgpu_bbs3d.so` を確認 |
 | `submodule update` 後に動作不安定 | 上流ヘッダだけ新しくなりライブラリが古いまま。Step 2 を再実行 |
-| `/click_loc` を pub しても何も起きない | rosbag 再生中(`/livox/points` `/livox/imu` が流れている)か確認。ノードログに `point cloud msg is not received` / `imu msg is not received` が出ていれば未受信 |
+| `/click_loc` を pub しても何も起きない | rosbag 再生中(`/livox/points` `/livox/imu` が流れている)か確認。もしノードログに `point cloud msg is not received` / `imu msg is not received` が出ていればトピック名を確認するかセンサデータが流れているか確認すること |
 
 ## ライセンス
 MIT。詳細は [`LICENSE`](LICENSE) を参照。本家 [KOKIAOKI/3d_bbs](https://github.com/KOKIAOKI/3d_bbs) も MIT ライセンスで、本リポジトリはそれに基づきます。
