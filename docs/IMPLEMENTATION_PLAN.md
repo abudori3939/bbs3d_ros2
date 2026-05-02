@@ -141,19 +141,21 @@ launch / rviz / config 設定のみの変更。TDD 対象外。
 - [x] `rviz/bbs3d.rviz` — 上流 `ros2_test/rviz2/rviz2_config/rviz2.rviz` のコピー。
 - DoD: `ros2 launch bbs3d_ros2 bbs3d_rviz2.launch.py` で上流デモと同じ Display 構成の RViz が起動する。
 
-### Step 5 — README + LICENSE  🟡 未着手
+### Step 5 — README + LICENSE  ✅ 完了
 ドキュメントのみ。TDD 対象外。
 
-- [ ] `README.md` を拡充:
-  - 前提条件(Ubuntu 22.04、ROS 2 humble、CUDA 12.0+、Eigen 3.4+)。
-  - 4 ステップの導入・ビルド・実行手順。
+- [x] `README.md` を拡充:
+  - 前提条件(Ubuntu 22.04、ROS 2 humble、CUDA 12.0+、Eigen 3.4+、NVIDIA GPU)。
+  - 4 ステップの導入・ビルド・実行手順(clone → 3d_bbs sudo make install → test data 配置 → colcon build)。
   - **太字注意:** 本パッケージは 3d_bbs のインストールを支援しない。ユーザが手動で `cd 3d_bbs && cmake .. && make && sudo make install` を行う。
   - **太字注意:** `git submodule update` 後は必ず `sudo make install` を再実行。
-  - test data リンク(上流 README より)。
+  - test data 配置の案内(`bbs3d_ros2/data/target/` `bbs3d_ros2/data/ros2_test_data/`、上流 `3d_bbs/ros2_test/ros2_test_code.md` の Google Drive リンクを参照)。
   - トリガ手順: `ros2 topic pub --once /click_loc std_msgs/msg/Bool "{data: true}"`。
-  - トピック / Service の I/F 一覧表(Service 行はフェーズ B 完了後に追記)。
-- [ ] `LICENSE` — MIT。著作権表示はメンテナ名で。
-- [ ] README で上流 `KOKIAOKI/3d_bbs` への謝辞を明記。
+  - 動作デモのフルフロー(config 編集 → ros2 launch → rosbag 再生 → /click_loc トリガ → 結果確認)。
+  - トピック / TF の I/F 一覧表(Service 行は **フェーズ B 完了後に追記**)。
+  - 設定スキーマ表、トラブルシューティング表。
+- [x] `LICENSE` — MIT。Copyright (c) 2026 abudori3939。
+- [x] README で上流 `KOKIAOKI/3d_bbs` への謝辞 + 元論文の引用を明記。
 - DoD: 初見のユーザが README だけで動作デモまで到達できる。
 
 ### Step 6 — エンドツーエンド動作確認(フェーズ A 完了)  🟡 未着手
