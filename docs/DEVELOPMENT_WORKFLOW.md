@@ -124,6 +124,21 @@ gh pr merge --squash --delete-branch
 - マージ方法は **squash** をデフォルトとする(履歴を Step 単位で読みやすくするため)。
 - マージ後、ローカルの main を pull して同期する。
 
+## テスト実行
+
+### `BBS3D_REQUIRE_TEST_DATA` で skip / fail を切替
+スモークテスト(`test/test_bbs3d_node_smoke.py`)はデフォルトで test data 未配置時に **skip** します(ローカル開発を妨げないため)。CI などで「データ未配置をサイレントに通したくない」場面では、環境変数 `BBS3D_REQUIRE_TEST_DATA=1` をセットすると **fail** に切り替わります(`true`、`yes` も同義、大小文字不問)。
+
+```bash
+# ローカル開発(デフォルト): data 無しなら skip
+colcon test --packages-select bbs3d_ros2
+
+# CI / 厳格モード: data 無しなら fail
+BBS3D_REQUIRE_TEST_DATA=1 colcon test --packages-select bbs3d_ros2
+```
+
+CI を組む場合はこの env var を立てることを推奨。
+
 ## 例外
 - **緊急修正**: ビルドが完全に壊れている等、main を即座に直す必要がある場合でも PR は通すが、レビューを最小限に縮め `--squash` で素早くマージしてよい。直接 push は依然として行わない。
 - **submodule の更新**: `3d_bbs/` のコミットを更新する PR は、上流の変更内容と `sudo make install` の再実行が必要である旨を本文に明記する。

@@ -173,19 +173,6 @@ ros2 topic pub --once /click_loc std_msgs/msg/Bool "{data: true}"
 | `submodule update` 後に動作不安定 | 上流ヘッダだけ新しくなりライブラリが古いまま。Step 2 を再実行 |
 | `/click_loc` を pub しても何も起きない | rosbag 再生中(`/livox/points` `/livox/imu` が流れている)か確認。もしノードログに `point cloud msg is not received` / `imu msg is not received` が出ていればトピック名を確認するかセンサデータが流れているか確認すること |
 
-## Tips
-
-### CI / 厳格モード: `BBS3D_REQUIRE_TEST_DATA=1`
-スモークテスト(`test/test_bbs3d_node_smoke.py`)はデフォルトで test data 未配置時に **skip** します(ローカル開発を妨げないため)。CI などで「データ未配置をサイレントに通したくない」場面では、環境変数 `BBS3D_REQUIRE_TEST_DATA=1` をセットすると **fail** に切り替わります(`true`、`yes` も同義、大小文字不問)。
-
-```bash
-# ローカル開発(デフォルト): data 無しなら skip
-colcon test --packages-select bbs3d_ros2
-
-# CI / 厳格モード: data 無しなら fail
-BBS3D_REQUIRE_TEST_DATA=1 colcon test --packages-select bbs3d_ros2
-```
-
 ## ライセンス
 MIT。詳細は [`LICENSE`](LICENSE) を参照。本家 [KOKIAOKI/3d_bbs](https://github.com/KOKIAOKI/3d_bbs) も MIT ライセンスで、本リポジトリはそれに基づきます。
 
