@@ -6,6 +6,11 @@ published returns ``success=false`` with a message containing
 ``"not received"``. This exercises the input-not-yet-received path of
 the shared run_localization() helper.
 
+The other 3 failure cases (``"localization timed out"``,
+``"score below threshold"``, plus success path) require either an
+engineered fixture (timeout) or the rosbag pipeline (score / success),
+and are deferred to Step 8 of docs/IMPLEMENTATION_PLAN.md.
+
 Skipped when test data (data/target/*.pcd) is not present locally,
 since the node still needs PCD to initialize before the Service becomes
 responsive. ``BBS3D_REQUIRE_TEST_DATA=1`` switches skip → fail (CI).

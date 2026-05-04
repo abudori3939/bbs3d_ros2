@@ -266,7 +266,7 @@ Bbs3dNode::LocalizeResult Bbs3dNode::run_localization()
 
 // Service `~/localize` の handler。run_localization の結果を Response に転記。
 void Bbs3dNode::localize_srv_callback(
-  const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+  [[maybe_unused]] const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
   std::shared_ptr<std_srvs::srv::Trigger::Response> res)
 {
   const auto result = run_localization();
@@ -275,8 +275,9 @@ void Bbs3dNode::localize_srv_callback(
 }
 
 // Topic `~/localize` (Bool) の callback。data=false なら無視、それ以外は
-// run_localization を呼び、失敗時のみ理由を stdout に出す(Service と同等の
-// 振る舞いを持たせるため)。
+// run_localization を呼び、失敗時のみ stdout に reason を出す。
+// Service と違って Topic では response 経路がないため、reason を呼び出し側に
+// 戻せない。代替として失敗時のみログに残し、成功時は静かにする(意図的な非対称)。
 void Bbs3dNode::localize_topic_callback(const std_msgs::msg::Bool::SharedPtr msg)
 {
   if (!msg->data) {return;}
