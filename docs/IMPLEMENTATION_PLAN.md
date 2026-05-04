@@ -189,21 +189,27 @@ launch / rviz / config 設定のみの変更。TDD 対象外。
 - [x] 副作用として `localize_topic_callback` の stdout 出力も正規化文言に変更(上流 `"point cloud msg is not received"` 等から `"point cloud not received"` 等へ)。フェーズ B 逸脱として許容。
 - DoD: `ros2 service call /bbs3d_ros2_node/localize std_srvs/srv/Trigger {}` で Bool トリガと同じ結果が得られる。
 
-### Step 8 — エラーハンドリング・ロギング強化  🟡 未着手
+### Step 8 — エラーハンドリング・ロギング強化  ✅ 完了
 **TDD 適用**。
 
-- [ ] `std::cout` / `std::cerr` を全て `RCLCPP_INFO/WARN/ERROR` に置換。
-- [ ] 起動時診断:
-  - PCD パスを絶対パスに展開してログ出力(どこを読みに行ったか)。
-  - パス存在チェック、PCD ファイル件数、合計点数、所要時間を INFO で出力。
-  - 失敗時(パス不在、ファイル 0 件、読み込みエラー)は ERROR を出してノードを正しく終了させる(あるいは fatal とする)。
-- [ ] ランタイム警告(global localization はトリガー駆動なので、**平常時は静かに**、トリガー時にだけ状態を点検する):
-  - lidar / imu の最終受信時刻を保持しておく。
-  - **トリガー(`/click_loc` または `~/localize`)受信時** に最終受信時刻をチェックし、いずれかが **3 秒以上前**(未受信を含む)であれば `RCLCPP_WARN` を出す(例: `"lidar topic not received for 3.4s — global localization may use stale data"`)。
-  - localize 結果の成否理由を構造化ログ(成功時は score / 実行時間、失敗時は reason)。
-- [ ] テスト: 不正な PCD パスを与えたときに ERROR ログが出てノードが正しく終了することを検証。
-- [ ] **note**: Step 6 で導入した `BBS3D_REQUIRE_TEST_DATA=1` env var gating の動作テスト(3 シナリオ)もこの Step で自動化候補として検討(現状は manual 検証のみ)。
-- DoD: 起動失敗・ランタイム異常の何が起きたか、ログだけで追える。
+- [x] `std::cout` / `std::cerr` を全て `RCLCPP_INFO/WARN/ERROR` に置換(全 23 箇所)。装飾的な `*=*=*` 囲み枠も削除。
+- [x] 起動時診断:
+  - PCD パスを `std::filesystem::weakly_canonical` で絶対パスに展開してログ出力。
+  - 件数(`tar_cloud_ptr->size()`)+ 所要時間を INFO で出力(例: `"Target clouds loaded: N points in X ms"`)。
+  - 失敗時は `RCLCPP_ERROR` + `throw std::runtime_error` → `main` で catch → `[Fatal]` を stderr に出して `exit(1)`。これまでの bad PCD → segfault を解消。
+- [x] ランタイム警告:
+  - `lidar_last_received_` / `imu_last_received_` を `cloud_callback` / `imu_callback` で `state_mutex_` 配下に更新。
+  - `run_localization` 冒頭で snapshot を取り、最終受信が 3s 以上前(または未受信、`nanoseconds() == 0`)なら `RCLCPP_WARN`(例: `"lidar topic stale (last %.1fs ago) — localize may use stale data"`)。
+  - localize 結果は成功時 `RCLCPP_INFO("Localize: success (score=%d, time=%.1f ms)")`、失敗時は `localize_topic_callback` で `RCLCPP_WARN("Localize: <reason>")`。Service 側は response.message に reason を載せる(Step 7)。
+- [x] PR #8 review carry-over:
+  - `mutable std::mutex state_mutex_` で `source_cloud_msg_` / `imu_buffer` / `*_last_received_` を保護(reviewer #1)。
+  - `get_nearest_imu_index` の `stamp` 引数を実際に使う形に変更し、上流の sec/nanosec 符号バグも同時に修正(reviewer #6 + Phase B 逸脱許容)。
+- [x] **load_target_clouds_pcd() メソッド境界**: Step 10 で `if (target_source_mode == "pcd")` でラップする想定の前準備として、PCD ロード + voxelmap 構築をメソッドに切り出し。
+- [x] テスト: `test/test_bad_pcd_path.py`(launch_testing)で不正パス起動時に ERROR ログ + exit code 1 を検証。
+- [ ] **未対応(将来 follow-up PR)**:
+  - Service callback の callback_group 分離(PR #8 review #2): 構造的変更で動作テストが難しいため、Step 10 完了後の clean-up PR で扱う候補。
+  - `BBS3D_REQUIRE_TEST_DATA=1` env var gating の自動テスト: data 退避が必要で重い、Step 10 完了後に検討。
+- DoD: 起動失敗・ランタイム異常の何が起きたか、**ログだけで追える** ✅(`test_bad_pcd_path` で証跡あり)。
 
 ### Step 9 — トピック名の config 化  🟡 未着手
 **TDD 適用**。
