@@ -95,10 +95,16 @@ Bbs3dNode::Bbs3dNode(const rclcpp::NodeOptions & options)
     std::cout << "[ERROR] Loading config file failed" << std::endl;
   }
 
-  click_sub_ = this->create_subscription<std_msgs::msg::Bool>(
-    "/click_loc",
+  localize_sub_ = this->create_subscription<std_msgs::msg::Bool>(
+    "~/localize",
     rclcpp::SensorDataQoS(),
-    std::bind(&Bbs3dNode::click_callback, this, std::placeholders::_1));
+    std::bind(&Bbs3dNode::localize_topic_callback, this, std::placeholders::_1));
+
+  localize_srv_ = this->create_service<std_srvs::srv::Trigger>(
+    "~/localize",
+    std::bind(
+      &Bbs3dNode::localize_srv_callback, this,
+      std::placeholders::_1, std::placeholders::_2));
 
   cloud_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
     lidar_topic_name,
@@ -188,17 +194,15 @@ void Bbs3dNode::broadcast_viewer_frame(const std::vector<Eigen::Vector3f> & poin
   tf2_broadcaster_.sendTransform(transformStamped);
 }
 
-void Bbs3dNode::click_callback(const std_msgs::msg::Bool::SharedPtr msg)
+// localize の本体処理。Topic/Service の両 callback から呼び出される。
+// 失敗時は LocalizeResult.message に正規化された reason 文字列を載せて返す。
+Bbs3dNode::LocalizeResult Bbs3dNode::run_localization()
 {
-  if (!msg->data) {return;}
   if (!source_cloud_msg_) {
-    std::cout << "point cloud msg is not received" << std::endl;
-    return;
+    return {false, "point cloud not received"};
   }
-
   if (!imu_buffer.size()) {
-    std::cout << "imu msg is not received" << std::endl;
-    return;
+    return {false, "imu not received"};
   }
 
   pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud(new pcl::PointCloud<pcl::PointXYZ>);
@@ -244,11 +248,9 @@ void Bbs3dNode::click_callback(const std_msgs::msg::Bool::SharedPtr msg)
 
   if (!gpu_bbs3d.has_localized()) {
     if (gpu_bbs3d.has_timed_out()) {
-      std::cout << "[Failed] Localization timed out." << std::endl;
-    } else {
-      std::cout << "[Failed] Score is below the threshold." << std::endl;
+      return {false, "localization timed out"};
     }
-    return;
+    return {false, "score below threshold"};
   }
 
   std::cout << "[Localize] Execution time: " << gpu_bbs3d.get_elapsed_time() << "[msec] "
@@ -258,6 +260,31 @@ void Bbs3dNode::click_callback(const std_msgs::msg::Bool::SharedPtr msg)
   publish_results(
     source_cloud_msg_->header, src_cloud, gpu_bbs3d.get_global_pose(),
     gpu_bbs3d.get_best_score(), gpu_bbs3d.get_elapsed_time());
+
+  return {true, ""};
+}
+
+// Service `~/localize` の handler。run_localization の結果を Response に転記。
+void Bbs3dNode::localize_srv_callback(
+  [[maybe_unused]] const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
+  std::shared_ptr<std_srvs::srv::Trigger::Response> res)
+{
+  const auto result = run_localization();
+  res->success = result.success;
+  res->message = result.message;
+}
+
+// Topic `~/localize` (Bool) の callback。data=false なら無視、それ以外は
+// run_localization を呼び、失敗時のみ stdout に reason を出す。
+// Service と違って Topic では response 経路がないため、reason を呼び出し側に
+// 戻せない。代替として失敗時のみログに残し、成功時は静かにする(意図的な非対称)。
+void Bbs3dNode::localize_topic_callback(const std_msgs::msg::Bool::SharedPtr msg)
+{
+  if (!msg->data) {return;}
+  const auto result = run_localization();
+  if (!result.success) {
+    std::cout << result.message << std::endl;
+  }
 }
 
 int Bbs3dNode::get_nearest_imu_index(

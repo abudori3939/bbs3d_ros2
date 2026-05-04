@@ -2,6 +2,7 @@
 #pragma once
 
 #include <iostream>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -18,6 +19,7 @@
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float32.hpp>
 #include <std_msgs/msg/int32.hpp>
+#include <std_srvs/srv/trigger.hpp>
 
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
@@ -34,9 +36,19 @@ public:
   ~Bbs3dNode() override;
 
 private:
+  struct LocalizeResult
+  {
+    bool success;
+    std::string message;
+  };
+
   bool load_config(const std::string & config);
   void broadcast_viewer_frame(const std::vector<Eigen::Vector3f> & points);
-  void click_callback(const std_msgs::msg::Bool::SharedPtr msg);
+  LocalizeResult run_localization();
+  void localize_topic_callback(const std_msgs::msg::Bool::SharedPtr msg);
+  void localize_srv_callback(
+    const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
+    std::shared_ptr<std_srvs::srv::Trigger::Response> res);
   int get_nearest_imu_index(
     const std::vector<sensor_msgs::msg::Imu> & imu_buffer,
     const builtin_interfaces::msg::Time & stamp);
@@ -49,8 +61,9 @@ private:
   void cloud_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
   void imu_callback(const sensor_msgs::msg::Imu::SharedPtr msg);
 
-  // sub
-  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr click_sub_;
+  // sub / srv
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr localize_sub_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr localize_srv_;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
 

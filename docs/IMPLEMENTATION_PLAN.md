@@ -178,13 +178,15 @@ launch / rviz / config 設定のみの変更。TDD 対象外。
 > ここから機能追加。各 Step は **TDD フロー**(`DEVELOPMENT_WORKFLOW.md` 参照)に厳格に従う。
 > RED → ユーザ承認 → GREEN → ユーザ承認 → PR の順。ビルドエラーは RED として認められない。
 
-### Step 7 — Service トリガ `~/localize` を追加  🟡 未着手
+### Step 7 — Service トリガ `~/localize` を追加 + Bool topic リネーム  ✅ 完了
 **TDD 適用**。
 
-- [ ] `Bbs3dNode` に `rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr localize_srv_` を追加。Service 名は `~/localize`(完全修飾は `/bbs3d_ros2_node/localize`)。
-- [ ] `click_callback` と Service ハンドラの共通処理を `private` メソッド(例:`run_localization()`)に切り出す。
-- [ ] Service レスポンス: 成功時 `success=true, message=""`。失敗時は `success=false, message=<reason>`(例:`"point cloud not received"`、`"imu not received"`、`"localization timed out"`、`"score below threshold"`)。
-- [ ] テスト: gtest または `launch_testing` で `~/localize` を呼び、成功 / 各種失敗ケースが期待通り返ることを検証。
+- [x] `Bbs3dNode` に `rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr localize_srv_` を追加。Service 名は `~/localize`(完全修飾は `/bbs3d_ros2_node/localize`)。
+- [x] **Bool トリガ topic を `/click_loc` → `~/localize` にリネーム**(Tk クリック GUI の名残整理)。Topic と Service は ROS 2 で別名前空間のため同名で共存。
+- [x] `click_callback` を `localize_topic_callback` にリネーム、`click_sub_` を `localize_sub_` にリネーム。`click_callback` の本体を `run_localization()` に切り出し、`localize_topic_callback` と `localize_srv_callback` の両方から呼ぶ。
+- [x] Service レスポンス: 成功時 `success=true, message=""`。失敗時は `success=false, message=<reason>`(`"point cloud not received"`、`"imu not received"`、`"localization timed out"`、`"score below threshold"`)。
+- [x] テスト: `launch_testing` + `rclpy` で `~/localize` を入力なしで呼び、`response.message` に `"not received"` を含むことを検証(`test/test_localize_service.py`)。
+- [x] 副作用として `localize_topic_callback` の stdout 出力も正規化文言に変更(上流 `"point cloud msg is not received"` 等から `"point cloud not received"` 等へ)。フェーズ B 逸脱として許容。
 - DoD: `ros2 service call /bbs3d_ros2_node/localize std_srvs/srv/Trigger {}` で Bool トリガと同じ結果が得られる。
 
 ### Step 8 — エラーハンドリング・ロギング強化  🟡 未着手
@@ -212,7 +214,7 @@ launch / rviz / config 設定のみの変更。TDD 対象外。
   - `global_pose_topic_name`(default `/global_pose`)
   - `score_topic_name`(default `/score`)
   - `time_topic_name`(default `/time`)
-  - `click_topic_name`(default `/click_loc`)
+  - `localize_topic_name`(default `~/localize`、Step 7 でリネーム済)
 - [ ] `Bbs3dNode` で yaml から読み込み、サブスクリプション / パブリッシャーを設定。
 - [ ] テスト: yaml で別名を指定したとき、その名前で publish / subscribe されることを検証。
 - DoD: 全トピック名がデフォルト動作を変えずに yaml で変更可能。

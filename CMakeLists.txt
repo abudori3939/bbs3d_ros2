@@ -82,6 +82,7 @@ if(BUILD_TESTING)
 
   find_package(launch_testing_ament_cmake REQUIRED)
   add_launch_test(test/test_bbs3d_node_smoke.py TIMEOUT 30)
+  add_launch_test(test/test_localize_service.py TIMEOUT 30)
 endif()
 
 ament_auto_package(
