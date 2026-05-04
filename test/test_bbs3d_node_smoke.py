@@ -78,11 +78,12 @@ class TestNodeInit(unittest.TestCase):
                 f"Test data not found at {DATA_DIR}. "
                 "Download per 3d_bbs/ros2_test/ros2_test_code.md."
             )
+        # stream を指定せず、stdout / stderr のいずれにマッチすれば OK にする
+        # (Step 8 で std::cout → RCLCPP_INFO に移行し、init ログは stderr に出る)
         proc_output.assertWaitFor(
             EXPECTED_LOG,
             process=node,
             timeout=LOG_WAIT_TIMEOUT_SEC,
-            stream="stdout",
         )
 
 
