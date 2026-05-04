@@ -47,6 +47,9 @@ private:
   // PCD ロード + voxelmap 構築。失敗時は std::runtime_error を throw。
   // Step 10 で target_source_mode == "pcd" の場合のみ呼ぶように 1 行 if で
   // ラップする想定。本 PR では ctor から無条件に呼ぶ。
+  // **前提条件**: tar_points_pub_ が既に初期化されていること(本メソッド内で
+  // /tar_points に publish するため)。Step 10 で呼び出し位置を変えるときは
+  // この順序を守ること(publisher 作成 → 本メソッド呼び出し)。
   void load_target_clouds_pcd();
   void broadcast_viewer_frame(const std::vector<Eigen::Vector3f> & points);
   LocalizeResult run_localization();
@@ -57,8 +60,9 @@ private:
   // Step 8: cloud_stamp を引数として受け取り正しく差分を取る(上流の sec/nanosec
   // 符号バグを修正)。ついでに mutex snapshot パターンに合わせ、関数内ではメンバ
   // 状態に触れない設計にした。
+  // 第 1 引数名は意図的に `imu_snapshot`(メンバ `imu_buffer` の shadow を回避)。
   int get_nearest_imu_index(
-    const std::vector<sensor_msgs::msg::Imu> & imu_buffer,
+    const std::vector<sensor_msgs::msg::Imu> & imu_snapshot,
     const builtin_interfaces::msg::Time & cloud_stamp);
   void publish_results(
     const std_msgs::msg::Header & header,

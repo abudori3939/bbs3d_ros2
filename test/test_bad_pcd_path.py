@@ -25,13 +25,23 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_YAML = PROJECT_ROOT / "test" / "fixtures" / "bbs3d_ros2_test.yaml"
-BAD_PATH = "/tmp/bbs3d_ros2_nonexistent_target_dir"
 EXPECTED_ERROR_SUBSTRING = "Couldn't load target clouds"
+
+
+def _make_guaranteed_nonexistent_path():
+    # mkdtemp で「存在するパス名」を確保した直後に rmdir することで、
+    # 「現時点で必ず存在しない」ユニークなパスを作る。事前にローカルで同名
+    # ディレクトリが作られていて load_tar_clouds が成功扱い(0 件)を返す
+    # 可能性を排除する。
+    path = tempfile.mkdtemp(prefix="bbs3d_ros2_nonexistent_")
+    os.rmdir(path)
+    return path
 
 
 @pytest.mark.launch_test
 def generate_test_description():
-    text = FIXTURE_YAML.read_text().replace("__TARGET_CLOUDS_PATH__", BAD_PATH)
+    bad_path = _make_guaranteed_nonexistent_path()
+    text = FIXTURE_YAML.read_text().replace("__TARGET_CLOUDS_PATH__", bad_path)
     tmp = tempfile.NamedTemporaryFile(
         mode="w", suffix=".yaml", delete=False, prefix="bbs3d_bad_path_"
     )

@@ -143,10 +143,11 @@ void Bbs3dNode::load_target_clouds_pcd()
 
 Bbs3dNode::Bbs3dNode(const rclcpp::NodeOptions & options)
 : Node("bbs3d_ros2_node", options),
-  tf2_broadcaster_(*this),
-  lidar_last_received_(0, 0, RCL_ROS_TIME),
-  imu_last_received_(0, 0, RCL_ROS_TIME)
+  tf2_broadcaster_(*this)
 {
+  // lidar_last_received_ / imu_last_received_ は default-init(nanoseconds=0)
+  // で「未受信」マーカーとして使う。RCL_ROS_TIME のハードコードは外し、最初の
+  // 受信時に this->now() の clock_type が代入される(use_sim_time=true でも壊れない)。
   RCLCPP_INFO(get_logger(), "Loading config file...");
   std::string config = this->declare_parameter<std::string>("config");
   if (!load_config(config)) {
@@ -245,7 +246,10 @@ Bbs3dNode::LocalizeResult Bbs3dNode::run_localization()
     imu_t = imu_last_received_;
   }
 
-  // トリガー時 staleness check(平常時は静かに、トリガー時にだけ点検する)
+  // トリガー時 staleness check(平常時は静かに、トリガー時にだけ点検する)。
+  // 注: ここの staleness は「最後に msg が届いた reception time」基準であり、
+  // sensor_msgs::Header.stamp の age ではない。古い stamp を貼り続ける fault は
+  // 検知できない(センサ側 / 上流ドライバの責務)。
   const auto now = this->now();
   const auto stale_threshold = rclcpp::Duration::from_seconds(STALE_THRESHOLD_SEC);
   if (lidar_t.nanoseconds() == 0 || (now - lidar_t) > stale_threshold) {
@@ -353,16 +357,18 @@ void Bbs3dNode::localize_topic_callback(const std_msgs::msg::Bool::SharedPtr msg
   }
 }
 
+// 引数名 imu_snapshot はメンバ imu_buffer の shadow を避けるため意図的に
+// 別名にしている。call site (run_localization) の local 名 imu_snapshot とも整合。
 int Bbs3dNode::get_nearest_imu_index(
-  const std::vector<sensor_msgs::msg::Imu> & imu_buffer,
+  const std::vector<sensor_msgs::msg::Imu> & imu_snapshot,
   const builtin_interfaces::msg::Time & cloud_stamp)
 {
   const double cloud_t = cloud_stamp.sec + cloud_stamp.nanosec * 1e-9;
   int imu_index = 0;
   double min_diff = 1000;
-  for (size_t i = 0; i < imu_buffer.size(); ++i) {
+  for (size_t i = 0; i < imu_snapshot.size(); ++i) {
     const double imu_t =
-      imu_buffer[i].header.stamp.sec + imu_buffer[i].header.stamp.nanosec * 1e-9;
+      imu_snapshot[i].header.stamp.sec + imu_snapshot[i].header.stamp.nanosec * 1e-9;
     const double diff = std::abs(imu_t - cloud_t);
     if (diff < min_diff) {
       imu_index = i;
