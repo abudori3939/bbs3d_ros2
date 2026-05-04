@@ -111,8 +111,13 @@ ros2 bag play ~/colcon_ws/src/bbs3d_ros2/data/ros2_test_data
 これで `/livox/points`(LiDAR)と `/livox/imu`(IMU)が流れ始めます。
 
 ### Step 4: グローバル位置推定をトリガ(別シェル)
+Topic と Service のどちらでもトリガできます(同名 `~/localize` を共存):
 ```bash
-ros2 topic pub --once /click_loc std_msgs/msg/Bool "{data: true}"
+# Topic で叩く(シンプル版)
+ros2 topic pub --once /bbs3d_ros2_node/localize std_msgs/msg/Bool "{data: true}"
+
+# Service で叩く(失敗 reason がレスポンスに乗る、自律システム向け)
+ros2 service call /bbs3d_ros2_node/localize std_srvs/srv/Trigger {}
 ```
 
 期待される結果:
@@ -130,7 +135,7 @@ ros2 topic pub --once /click_loc std_msgs/msg/Bool "{data: true}"
 ### Subscriptions
 | Topic | Type | 用途 |
 |---|---|---|
-| `/click_loc` | `std_msgs/msg/Bool` | `data: true` でグローバル位置推定をトリガ |
+| `~/localize`(完全修飾 `/bbs3d_ros2_node/localize`) | `std_msgs/msg/Bool` | `data: true` でグローバル位置推定をトリガ |
 | `<lidar_topic_name>`(サンプル `/livox/points`) | `sensor_msgs/msg/PointCloud2` | source 点群 |
 | `<imu_topic_name>`(サンプル `/livox/imu`) | `sensor_msgs/msg/Imu` | 重力方向アライメント用 |
 
@@ -144,7 +149,11 @@ ros2 topic pub --once /click_loc std_msgs/msg/Bool "{data: true}"
 | `/time` | `std_msgs/msg/Float32` | 推定の実行時間 [msec] |
 
 ### Services
-- 現在なし。フェーズ B(Step 7)で `~/localize`(`std_srvs/srv/Trigger`)を追加予定。
+| Service | Type | 用途 |
+|---|---|---|
+| `~/localize`(完全修飾 `/bbs3d_ros2_node/localize`) | `std_srvs/srv/Trigger` | グローバル位置推定をトリガ。失敗時は `response.message` に reason(`"point cloud not received"`、`"imu not received"`、`"localization timed out"`、`"score below threshold"`)を返す |
+
+> Topic と Service は ROS 2 で別名前空間に属するため、同じ完全修飾名で共存できます。`ros2 topic pub` か `ros2 service call` かで型に応じた呼び出しになります。
 
 ### TF
 - `map → viewer`(target 点群の重心位置に viewer フレームを broadcast、RViz の TopDown 視点用)
@@ -171,7 +180,7 @@ ros2 topic pub --once /click_loc std_msgs/msg/Bool "{data: true}"
 | `[ERROR] Can not open folder` の直後に segfault | `target_clouds` がプレースホルダ(`/path/to/target`)のまま、または存在しないパス。**絶対パス**を指定すること。フェーズ B(Step 8)で graceful error に改善予定 |
 | ビルドが `find_package(gpu_bbs3d) failed` で失敗 | Step 2(本家 `sudo make install`)が未実行。`/usr/local/lib/libgpu_bbs3d.so` を確認 |
 | `submodule update` 後に動作不安定 | 上流ヘッダだけ新しくなりライブラリが古いまま。Step 2 を再実行 |
-| `/click_loc` を pub しても何も起きない | rosbag 再生中(`/livox/points` `/livox/imu` が流れている)か確認。もしノードログに `point cloud msg is not received` / `imu msg is not received` が出ていればトピック名を確認するかセンサデータが流れているか確認すること |
+| `~/localize` を pub / call しても何も起きない | rosbag 再生中(`/livox/points` `/livox/imu` が流れている)か確認。Service なら `response.message` に `"point cloud not received"` / `"imu not received"` 等が乗る。Topic 経由のときはノードログに同じメッセージが出るので、トピック名やセンサデータの流れを確認 |
 
 ## ライセンス
 MIT。詳細は [`LICENSE`](LICENSE) を参照。本家 [KOKIAOKI/3d_bbs](https://github.com/KOKIAOKI/3d_bbs) も MIT ライセンスで、本リポジトリはそれに基づきます。
