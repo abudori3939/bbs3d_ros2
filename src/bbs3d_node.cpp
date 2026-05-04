@@ -95,10 +95,16 @@ Bbs3dNode::Bbs3dNode(const rclcpp::NodeOptions & options)
     std::cout << "[ERROR] Loading config file failed" << std::endl;
   }
 
-  click_sub_ = this->create_subscription<std_msgs::msg::Bool>(
-    "/click_loc",
+  localize_sub_ = this->create_subscription<std_msgs::msg::Bool>(
+    "~/localize",
     rclcpp::SensorDataQoS(),
-    std::bind(&Bbs3dNode::click_callback, this, std::placeholders::_1));
+    std::bind(&Bbs3dNode::localize_topic_callback, this, std::placeholders::_1));
+
+  localize_srv_ = this->create_service<std_srvs::srv::Trigger>(
+    "~/localize",
+    std::bind(
+      &Bbs3dNode::localize_srv_callback, this,
+      std::placeholders::_1, std::placeholders::_2));
 
   cloud_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
     lidar_topic_name,
@@ -188,7 +194,18 @@ void Bbs3dNode::broadcast_viewer_frame(const std::vector<Eigen::Vector3f> & poin
   tf2_broadcaster_.sendTransform(transformStamped);
 }
 
-void Bbs3dNode::click_callback(const std_msgs::msg::Bool::SharedPtr msg)
+// Step 7 RED の skeleton: success=false かつ message="" を返すだけ。
+// テストは message に "not received" を含むことを期待するため失敗する。
+// GREEN で run_localization() 経由に refactor する。
+void Bbs3dNode::localize_srv_callback(
+  const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+  std::shared_ptr<std_srvs::srv::Trigger::Response> res)
+{
+  res->success = false;
+  res->message = "";
+}
+
+void Bbs3dNode::localize_topic_callback(const std_msgs::msg::Bool::SharedPtr msg)
 {
   if (!msg->data) {return;}
   if (!source_cloud_msg_) {
