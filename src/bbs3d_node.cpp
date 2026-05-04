@@ -3,7 +3,10 @@
 
 #include <math.h>
 #include <chrono>
+#include <filesystem>
 #include <memory>
+#include <mutex>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -26,6 +29,9 @@ namespace bbs3d_ros2
 namespace
 {
 
+// トリガー受信時に lidar / imu の最終受信時刻が古ければ WARN を出す閾値。
+constexpr double STALE_THRESHOLD_SEC = 3.0;
+
 Eigen::Vector3d to_eigen(const std::vector<double> & vec)
 {
   Eigen::Vector3d e_vec;
@@ -45,37 +51,37 @@ bool Bbs3dNode::load_config(const std::string & config)
 {
   YAML::Node conf = YAML::LoadFile(config);
 
-  std::cout << "[YAML] Loading paths..." << std::endl;
+  RCLCPP_INFO(get_logger(), "Loading paths...");
   tar_path = conf["target_clouds"].as<std::string>();
 
-  std::cout << "[YAML] Loading topic name..." << std::endl;
+  RCLCPP_INFO(get_logger(), "Loading topic name...");
   lidar_topic_name = conf["lidar_topic_name"].as<std::string>();
   imu_topic_name = conf["imu_topic_name"].as<std::string>();
 
-  std::cout << "[YAML] Loading 3D-BBS parameters..." << std::endl;
+  RCLCPP_INFO(get_logger(), "Loading 3D-BBS parameters...");
   min_level_res = conf["min_level_res"].as<double>();
   max_level = conf["max_level"].as<int>();
 
   if (min_level_res == 0.0 || max_level == 0) {
-    std::cout << "[ERROR] Set min_level and num_layers except for 0" << std::endl;
+    RCLCPP_ERROR(get_logger(), "Set min_level_res and max_level to non-zero values");
     return false;
   }
 
-  std::cout << "[YAML] Loading angular search range..." << std::endl;
+  RCLCPP_INFO(get_logger(), "Loading angular search range...");
   std::vector<double> min_rpy_temp = conf["min_rpy"].as<std::vector<double>>();
   std::vector<double> max_rpy_temp = conf["max_rpy"].as<std::vector<double>>();
   if (min_rpy_temp.size() == 3 && max_rpy_temp.size() == 3) {
     min_rpy = to_eigen(min_rpy_temp);
     max_rpy = to_eigen(max_rpy_temp);
   } else {
-    std::cout << "[ERROR] Set min_rpy and max_rpy correctly" << std::endl;
+    RCLCPP_ERROR(get_logger(), "Set min_rpy and max_rpy correctly");
     return false;
   }
 
-  std::cout << "[YAML] Loading score threshold percentage..." << std::endl;
+  RCLCPP_INFO(get_logger(), "Loading score threshold percentage...");
   score_threshold_percentage = conf["score_threshold_percentage"].as<double>();
 
-  std::cout << "[YAML] Loading downsample parameters..." << std::endl;
+  RCLCPP_INFO(get_logger(), "Loading downsample parameters...");
   tar_leaf_size = conf["tar_leaf_size"].as<float>();
   src_leaf_size = conf["src_leaf_size"].as<float>();
   min_scan_range = conf["min_scan_range"].as<double>();
@@ -86,13 +92,66 @@ bool Bbs3dNode::load_config(const std::string & config)
   return true;
 }
 
-Bbs3dNode::Bbs3dNode(const rclcpp::NodeOptions & options)
-: Node("bbs3d_ros2_node", options), tf2_broadcaster_(*this)
+void Bbs3dNode::load_target_clouds_pcd()
 {
-  std::cout << "[ROS2] Loading config file..." << std::endl;
+  // tar_path を絶対パスに展開してログに出す(ユーザがどこを読みに行ったかを明確化)
+  std::string abs_path;
+  try {
+    abs_path = std::filesystem::weakly_canonical(std::filesystem::path(tar_path)).string();
+  } catch (const std::exception & e) {
+    abs_path = tar_path;  // 解決失敗時は元のパスを使う
+  }
+  RCLCPP_INFO(get_logger(), "Loading target clouds from %s", abs_path.c_str());
+
+  pcl::PointCloud<pcl::PointXYZ>::Ptr tar_cloud_ptr(new pcl::PointCloud<pcl::PointXYZ>());
+  const auto t0 = std::chrono::steady_clock::now();
+  if (!pciof::load_tar_clouds(abs_path, tar_leaf_size, tar_cloud_ptr)) {
+    RCLCPP_ERROR(get_logger(), "Couldn't load target clouds from %s", abs_path.c_str());
+    throw std::runtime_error("target clouds load failed");
+  }
+  const auto t1 = std::chrono::steady_clock::now();
+  const auto load_ms =
+    std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+  RCLCPP_INFO(
+    get_logger(),
+    "Target clouds loaded: %zu points in %ld ms",
+    tar_cloud_ptr->size(), load_ms);
+
+  // RViz が立ち上がる時間を待つ(上流互換)
+  std::this_thread::sleep_for(std::chrono::seconds(1));
+
+  // /tar_points に publish して RViz で確認できるようにする
+  sensor_msgs::msg::PointCloud2::SharedPtr points_msg(new sensor_msgs::msg::PointCloud2);
+  pcl::toROSMsg(*tar_cloud_ptr, *points_msg);
+  points_msg->header.frame_id = "map";
+  points_msg->header.stamp = this->now();
+  tar_points_pub_->publish(*points_msg);
+
+  std::vector<Eigen::Vector3f> tar_points;
+  pciof::pcl_to_eigen(tar_cloud_ptr, tar_points);
+  broadcast_viewer_frame(tar_points);
+
+  // 階層 voxelmap 構築。tar_path 配下に保存済みの coords ファイルがあればそれを読む。
+  RCLCPP_INFO(get_logger(), "Creating hierarchical voxel map...");
+  if (gpu_bbs3d.set_voxelmaps_coords(abs_path)) {
+    RCLCPP_INFO(get_logger(), "Loaded voxelmaps coords directly");
+  } else {
+    gpu_bbs3d.set_tar_points(tar_points, min_level_res, max_level);
+    gpu_bbs3d.set_trans_search_range(tar_points);
+  }
+}
+
+Bbs3dNode::Bbs3dNode(const rclcpp::NodeOptions & options)
+: Node("bbs3d_ros2_node", options),
+  tf2_broadcaster_(*this),
+  lidar_last_received_(0, 0, RCL_ROS_TIME),
+  imu_last_received_(0, 0, RCL_ROS_TIME)
+{
+  RCLCPP_INFO(get_logger(), "Loading config file...");
   std::string config = this->declare_parameter<std::string>("config");
   if (!load_config(config)) {
-    std::cout << "[ERROR] Loading config file failed" << std::endl;
+    RCLCPP_ERROR(get_logger(), "Loading config file failed");
+    throw std::runtime_error("config load failed");
   }
 
   localize_sub_ = this->create_subscription<std_msgs::msg::Bool>(
@@ -122,34 +181,9 @@ Bbs3dNode::Bbs3dNode(const rclcpp::NodeOptions & options)
   score_pub_ = this->create_publisher<std_msgs::msg::Int32>("/score", 10);
   time_pub_ = this->create_publisher<std_msgs::msg::Float32>("/time", 10);
 
-  std::cout << "[ROS2] Loading target clouds..." << std::endl;
-  pcl::PointCloud<pcl::PointXYZ>::Ptr tar_cloud_ptr(new pcl::PointCloud<pcl::PointXYZ>());
-  if (!pciof::load_tar_clouds(tar_path, tar_leaf_size, tar_cloud_ptr)) {
-    std::cout << "[ERROR] Couldn't load target clouds" << std::endl;
-  }
-
-  // Wait for rviz2
-  std::this_thread::sleep_for(std::chrono::seconds(1));
-
-  sensor_msgs::msg::PointCloud2::SharedPtr points_msg(new sensor_msgs::msg::PointCloud2);
-  pcl::toROSMsg(*tar_cloud_ptr, *points_msg);
-  points_msg->header.frame_id = "map";
-  points_msg->header.stamp = this->now();
-  tar_points_pub_->publish(*points_msg);
-
-  std::vector<Eigen::Vector3f> tar_points;
-  pciof::pcl_to_eigen(tar_cloud_ptr, tar_points);
-
-  broadcast_viewer_frame(tar_points);
-  std::cout << "[ROS2] Target clouds loaded" << std::endl;
-
-  std::cout << "[Voxel map] Creating hierarchical voxel map..." << std::endl;
-  if (gpu_bbs3d.set_voxelmaps_coords(tar_path)) {
-    std::cout << "[Voxel map] Loaded voxelmaps coords directly" << std::endl;
-  } else {
-    gpu_bbs3d.set_tar_points(tar_points, min_level_res, max_level);
-    gpu_bbs3d.set_trans_search_range(tar_points);
-  }
+  // PCD ロード + voxelmap 構築。Step 10 で target_source_mode == "pcd" の場合のみ
+  // 呼び出すよう if でラップする想定。失敗時は throw。
+  load_target_clouds_pcd();
 
   gpu_bbs3d.set_angular_search_range(min_rpy.cast<float>(), max_rpy.cast<float>());
   gpu_bbs3d.set_score_threshold_percentage(static_cast<float>(score_threshold_percentage));
@@ -158,9 +192,7 @@ Bbs3dNode::Bbs3dNode(const rclcpp::NodeOptions & options)
     gpu_bbs3d.set_timeout_duration_in_msec(timeout_msec);
   }
 
-  std::cout << "*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*" << std::endl;
-  std::cout << "   [ROS2] 3D-BBS initialized" << std::endl;
-  std::cout << "*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*" << std::endl;
+  RCLCPP_INFO(get_logger(), "[ROS2] 3D-BBS initialized");
 }
 
 Bbs3dNode::~Bbs3dNode() = default;
@@ -175,9 +207,10 @@ void Bbs3dNode::broadcast_viewer_frame(const std::vector<Eigen::Vector3f> & poin
   centroid /= points.size();
   centroid += points[0].cast<double>();
 
-  std::cout << "[Viewer]: "
-            << "x: " << centroid[0] << ", y: " << centroid[1] << ", z: " << centroid[2]
-            << std::endl;
+  RCLCPP_INFO(
+    get_logger(),
+    "Viewer centroid: x=%.3f y=%.3f z=%.3f",
+    centroid[0], centroid[1], centroid[2]);
 
   geometry_msgs::msg::TransformStamped transformStamped;
   transformStamped.header.stamp = this->now();
@@ -198,15 +231,47 @@ void Bbs3dNode::broadcast_viewer_frame(const std::vector<Eigen::Vector3f> & poin
 // 失敗時は LocalizeResult.message に正規化された reason 文字列を載せて返す。
 Bbs3dNode::LocalizeResult Bbs3dNode::run_localization()
 {
-  if (!source_cloud_msg_) {
+  // 共有状態(source_cloud_msg_ / imu_buffer / *_last_received_)を mutex で snapshot
+  // して、以降の重い処理は lock 解放後に行う。
+  sensor_msgs::msg::PointCloud2::SharedPtr cloud_msg;
+  std::vector<sensor_msgs::msg::Imu> imu_snapshot;
+  rclcpp::Time lidar_t;
+  rclcpp::Time imu_t;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    cloud_msg = source_cloud_msg_;
+    imu_snapshot = imu_buffer;
+    lidar_t = lidar_last_received_;
+    imu_t = imu_last_received_;
+  }
+
+  // トリガー時 staleness check(平常時は静かに、トリガー時にだけ点検する)
+  const auto now = this->now();
+  const auto stale_threshold = rclcpp::Duration::from_seconds(STALE_THRESHOLD_SEC);
+  if (lidar_t.nanoseconds() == 0 || (now - lidar_t) > stale_threshold) {
+    const double age = (lidar_t.nanoseconds() == 0) ? -1.0 : (now - lidar_t).seconds();
+    RCLCPP_WARN(
+      get_logger(),
+      "lidar topic stale (last %.1fs ago) — localize may use stale data",
+      age);
+  }
+  if (imu_t.nanoseconds() == 0 || (now - imu_t) > stale_threshold) {
+    const double age = (imu_t.nanoseconds() == 0) ? -1.0 : (now - imu_t).seconds();
+    RCLCPP_WARN(
+      get_logger(),
+      "imu topic stale (last %.1fs ago) — localize may use stale data",
+      age);
+  }
+
+  if (!cloud_msg) {
     return {false, "point cloud not received"};
   }
-  if (!imu_buffer.size()) {
+  if (imu_snapshot.empty()) {
     return {false, "imu not received"};
   }
 
   pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud(new pcl::PointCloud<pcl::PointXYZ>);
-  pcl::fromROSMsg(*source_cloud_msg_, *src_cloud);
+  pcl::fromROSMsg(*cloud_msg, *src_cloud);
 
   if (src_leaf_size != 0.0f) {
     pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud_ptr(new pcl::PointCloud<pcl::PointXYZ>());
@@ -230,8 +295,8 @@ Bbs3dNode::LocalizeResult Bbs3dNode::run_localization()
     *src_cloud = *cut_cloud_ptr;
   }
 
-  int imu_index = get_nearest_imu_index(imu_buffer, source_cloud_msg_->header.stamp);
-  const auto imu_msg = imu_buffer[imu_index];
+  int imu_index = get_nearest_imu_index(imu_snapshot, cloud_msg->header.stamp);
+  const auto imu_msg = imu_snapshot[imu_index];
   const Eigen::Vector3d acc = {
     imu_msg.linear_acceleration.x,
     imu_msg.linear_acceleration.y,
@@ -243,7 +308,7 @@ Bbs3dNode::LocalizeResult Bbs3dNode::run_localization()
   pciof::pcl_to_eigen(src_cloud, src_points);
   gpu_bbs3d.set_src_points(src_points);
 
-  std::cout << "[Localize] start" << std::endl;
+  RCLCPP_INFO(get_logger(), "Localize: start");
   gpu_bbs3d.localize();
 
   if (!gpu_bbs3d.has_localized()) {
@@ -253,12 +318,13 @@ Bbs3dNode::LocalizeResult Bbs3dNode::run_localization()
     return {false, "score below threshold"};
   }
 
-  std::cout << "[Localize] Execution time: " << gpu_bbs3d.get_elapsed_time() << "[msec] "
-            << std::endl;
-  std::cout << "[Localize] score: " << gpu_bbs3d.get_best_score() << std::endl;
+  RCLCPP_INFO(
+    get_logger(),
+    "Localize: success (score=%d, time=%.1f ms)",
+    gpu_bbs3d.get_best_score(), gpu_bbs3d.get_elapsed_time());
 
   publish_results(
-    source_cloud_msg_->header, src_cloud, gpu_bbs3d.get_global_pose(),
+    cloud_msg->header, src_cloud, gpu_bbs3d.get_global_pose(),
     gpu_bbs3d.get_best_score(), gpu_bbs3d.get_elapsed_time());
 
   return {true, ""};
@@ -275,7 +341,7 @@ void Bbs3dNode::localize_srv_callback(
 }
 
 // Topic `~/localize` (Bool) の callback。data=false なら無視、それ以外は
-// run_localization を呼び、失敗時のみ stdout に reason を出す。
+// run_localization を呼び、失敗時のみ WARN に reason を出す。
 // Service と違って Topic では response 経路がないため、reason を呼び出し側に
 // 戻せない。代替として失敗時のみログに残し、成功時は静かにする(意図的な非対称)。
 void Bbs3dNode::localize_topic_callback(const std_msgs::msg::Bool::SharedPtr msg)
@@ -283,22 +349,21 @@ void Bbs3dNode::localize_topic_callback(const std_msgs::msg::Bool::SharedPtr msg
   if (!msg->data) {return;}
   const auto result = run_localization();
   if (!result.success) {
-    std::cout << result.message << std::endl;
+    RCLCPP_WARN(get_logger(), "Localize: %s", result.message.c_str());
   }
 }
 
 int Bbs3dNode::get_nearest_imu_index(
   const std::vector<sensor_msgs::msg::Imu> & imu_buffer,
-  const builtin_interfaces::msg::Time & stamp)
+  const builtin_interfaces::msg::Time & cloud_stamp)
 {
-  (void)stamp;  // upstream uses source_cloud_msg_->header.stamp directly (kept for parity)
+  const double cloud_t = cloud_stamp.sec + cloud_stamp.nanosec * 1e-9;
   int imu_index = 0;
   double min_diff = 1000;
   for (size_t i = 0; i < imu_buffer.size(); ++i) {
-    double diff = std::abs(
-      imu_buffer[i].header.stamp.sec + imu_buffer[i].header.stamp.nanosec * 1e-9 -
-      source_cloud_msg_->header.stamp.sec +
-      source_cloud_msg_->header.stamp.nanosec * 1e-9);
+    const double imu_t =
+      imu_buffer[i].header.stamp.sec + imu_buffer[i].header.stamp.nanosec * 1e-9;
+    const double diff = std::abs(imu_t - cloud_t);
     if (diff < min_diff) {
       imu_index = i;
       min_diff = diff;
@@ -346,16 +411,20 @@ void Bbs3dNode::publish_results(
 void Bbs3dNode::cloud_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 {
   if (!msg) {return;}
+  std::lock_guard<std::mutex> lock(state_mutex_);
   source_cloud_msg_ = msg;
+  lidar_last_received_ = this->now();
 }
 
 void Bbs3dNode::imu_callback(const sensor_msgs::msg::Imu::SharedPtr msg)
 {
   if (!msg) {return;}
+  std::lock_guard<std::mutex> lock(state_mutex_);
   imu_buffer.emplace_back(*msg);
   if (imu_buffer.size() > 30) {
     imu_buffer.erase(imu_buffer.begin());
   }
+  imu_last_received_ = this->now();
 }
 
 }  // namespace bbs3d_ros2

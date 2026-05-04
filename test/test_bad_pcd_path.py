@@ -49,6 +49,18 @@ def generate_test_description():
     return ld, {"node": node, "tmp_yaml": tmp.name}
 
 
+class TestErrorLogAppears(unittest.TestCase):
+    def test_error_log_appears(self, proc_output, node, tmp_yaml):
+        # Active test として ERROR ログを待つことで、process が constructor を
+        # 走り終わる時間を稼ぐ。これがないと launch_testing が active テスト
+        # 0 件で即 SIGINT を送り、process がコンストラクタ実行中に死ぬ。
+        proc_output.assertWaitFor(
+            EXPECTED_ERROR_SUBSTRING,
+            process=node,
+            timeout=15.0,
+        )
+
+
 @launch_testing.post_shutdown_test()
 class TestBadPathOutcome(unittest.TestCase):
     def test_exit_code_is_one_not_segfault(self, proc_info, node, tmp_yaml):
