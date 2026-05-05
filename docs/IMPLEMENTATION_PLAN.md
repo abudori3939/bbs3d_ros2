@@ -211,19 +211,19 @@ launch / rviz / config 設定のみの変更。TDD 対象外。
   - `BBS3D_REQUIRE_TEST_DATA=1` env var gating の自動テスト: data 退避が必要で重い、Step 10 完了後に検討。
 - DoD: 起動失敗・ランタイム異常の何が起きたか、**ログだけで追える** ✅(`test_bad_pcd_path` で証跡あり)。
 
-### Step 9 — トピック名の config 化  🟡 未着手
+### Step 9 — トピック名の config 化  ✅ 完了
 **TDD 適用**。
 
-- [ ] `config/bbs3d_ros2.yaml` に出力トピックとトリガトピックの項目を追加。デフォルトは上流互換:
+- [x] `config/bbs3d_ros2.yaml` に出力トピックとトリガトピックの項目を追加(Optional セクションにコメントアウト形式で記載、外せばリネーム反映)。デフォルトは上流互換:
   - `tar_points_topic_name`(default `/tar_points`)
   - `src_points_on_global_pose_topic_name`(default `/src_points_on_global_pose`)
   - `global_pose_topic_name`(default `/global_pose`)
   - `score_topic_name`(default `/score`)
   - `time_topic_name`(default `/time`)
-  - `localize_topic_name`(default `~/localize`、Step 7 でリネーム済)
-- [ ] `Bbs3dNode` で yaml から読み込み、サブスクリプション / パブリッシャーを設定。
-- [ ] テスト: yaml で別名を指定したとき、その名前で publish / subscribe されることを検証。
-- DoD: 全トピック名がデフォルト動作を変えずに yaml で変更可能。
+  - `localize_topic_name`(default `~/localize`、Step 7 でリネーム済。Bool topic と Trigger service の両方に適用)
+- [x] `Bbs3dNode` で yaml から読み込み、サブスクリプション / パブリッシャーを設定。`get_or(YAML::Node, key, default)` ヘルパで「key が無ければ default」とし、既存ユーザの yaml(これらのキーが無い)が壊れない設計にした。
+- [x] テスト: `test/test_topic_name_config.py` で fixture yaml に 6 項目をリネーム指定して起動 → ROS graph の `get_topic_names_and_types` / `get_service_names_and_types` で renamed 名が現れること、default 名が消えていることを assert。
+- DoD: 全トピック名がデフォルト動作を変えずに yaml で変更可能 ✅。
 
 ### Step 10 — target 点群の topic モード対応(地図ホットスワップ)  🟡 未着手
 **TDD 適用**。
