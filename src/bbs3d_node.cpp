@@ -32,6 +32,15 @@ namespace
 // トリガー受信時に lidar / imu の最終受信時刻が古ければ WARN を出す閾値。
 constexpr double STALE_THRESHOLD_SEC = 3.0;
 
+// yaml に key があればその値、無ければ default を返す。Step 9 で追加した
+// optional な topic name 用。`as<std::string>()` 直書きすると key 不在で
+// YAML::TypedBadConversion を投げてしまうため、後方互換のために用意する。
+std::string get_or(
+  const YAML::Node & n, const std::string & key, const std::string & def)
+{
+  return n[key] ? n[key].as<std::string>() : def;
+}
+
 Eigen::Vector3d to_eigen(const std::vector<double> & vec)
 {
   Eigen::Vector3d e_vec;
@@ -57,6 +66,19 @@ bool Bbs3dNode::load_config(const std::string & config)
   RCLCPP_INFO(get_logger(), "Loading topic name...");
   lidar_topic_name = conf["lidar_topic_name"].as<std::string>();
   imu_topic_name = conf["imu_topic_name"].as<std::string>();
+  // Step 9: 出力 / トリガートピック名。yaml に無ければ上流互換のデフォルト。
+  tar_points_topic_name =
+    get_or(conf, "tar_points_topic_name", "/tar_points");
+  src_points_on_global_pose_topic_name =
+    get_or(
+    conf, "src_points_on_global_pose_topic_name",
+    "/src_points_on_global_pose");
+  global_pose_topic_name =
+    get_or(conf, "global_pose_topic_name", "/global_pose");
+  score_topic_name = get_or(conf, "score_topic_name", "/score");
+  time_topic_name = get_or(conf, "time_topic_name", "/time");
+  localize_topic_name =
+    get_or(conf, "localize_topic_name", "~/localize");
 
   RCLCPP_INFO(get_logger(), "Loading 3D-BBS parameters...");
   min_level_res = conf["min_level_res"].as<double>();
@@ -156,12 +178,12 @@ Bbs3dNode::Bbs3dNode(const rclcpp::NodeOptions & options)
   }
 
   localize_sub_ = this->create_subscription<std_msgs::msg::Bool>(
-    "~/localize",
+    localize_topic_name,
     rclcpp::SensorDataQoS(),
     std::bind(&Bbs3dNode::localize_topic_callback, this, std::placeholders::_1));
 
   localize_srv_ = this->create_service<std_srvs::srv::Trigger>(
-    "~/localize",
+    localize_topic_name,
     std::bind(
       &Bbs3dNode::localize_srv_callback, this,
       std::placeholders::_1, std::placeholders::_2));
@@ -175,12 +197,14 @@ Bbs3dNode::Bbs3dNode(const rclcpp::NodeOptions & options)
     imu_topic_name, 100,
     std::bind(&Bbs3dNode::imu_callback, this, std::placeholders::_1));
 
-  tar_points_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/tar_points", 10);
+  tar_points_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+    tar_points_topic_name, 10);
   src_points_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-    "/src_points_on_global_pose", 10);
-  global_pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("/global_pose", 10);
-  score_pub_ = this->create_publisher<std_msgs::msg::Int32>("/score", 10);
-  time_pub_ = this->create_publisher<std_msgs::msg::Float32>("/time", 10);
+    src_points_on_global_pose_topic_name, 10);
+  global_pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(
+    global_pose_topic_name, 10);
+  score_pub_ = this->create_publisher<std_msgs::msg::Int32>(score_topic_name, 10);
+  time_pub_ = this->create_publisher<std_msgs::msg::Float32>(time_topic_name, 10);
 
   // PCD ロード + voxelmap 構築。Step 10 で target_source_mode == "pcd" の場合のみ
   // 呼び出すよう if でラップする想定。失敗時は throw。
