@@ -1,14 +1,17 @@
 """
-Topic name config test: yaml renames are honored by publishers.
+Topic name config test: yaml-configured names appear in the ROS graph.
 
-fixture yaml の末尾に ``tar_points_topic_name: /_bbs3d_ros2_test/tar_points_renamed``
-を追記して bbs3d_ros2_node を起動したとき、起動完了直後に default の
-``/tar_points`` ではなくリネーム後の名前で ``PointCloud2`` メッセージが
-publish されることを ``rclpy`` の subscriber で検証する。
+fixture yaml の末尾に 6 個のリネーム指定(``tar_points_topic_name`` 等)を
+追記して bbs3d_ros2_node を起動したとき、ROS グラフから取得したトピック /
+サービス名一覧に「リネーム後の名前が存在する」「default 名は存在しない」を
+検証する。Step 9 が変えるのは「publisher / subscription / service の名前
+そのもの」なので、メッセージ流通経路ではなく、グラフ上の名前を直接 assert
+する。
 
-RED 時点(コードがハードコードのまま): ``/tar_points`` でしか publish され
-ないため、リネーム名 ``/_bbs3d_ros2_test/tar_points_renamed`` への
-subscribe には何も届かず、``assertGreater(len(received), 0)`` が FAIL する。
+RED 時点(コードがハードコードのまま): publisher は ``/tar_points`` 等の
+default 名で作られるため、renamed 名は graph に現れず、default 名が残る。
+``assertTrue(ok)`` および ``assertFalse(leaked)`` がそれぞれ FAIL する
+正当な RED(ビルドは通り、実行時の振る舞い不一致)。
 
 Skipped when test data (data/target/*.pcd) is not present locally.
 ``BBS3D_REQUIRE_TEST_DATA=1`` switches skip → fail (CI / strict mode)。
@@ -23,15 +26,33 @@ import launch_ros.actions
 import launch_testing.actions
 import pytest
 import rclpy
-from sensor_msgs.msg import PointCloud2
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data" / "target"
 FIXTURE_YAML = PROJECT_ROOT / "test" / "fixtures" / "bbs3d_ros2_test.yaml"
-# 別ノード(他テスト)と衝突しない擬似プライベート名前空間。
-RENAMED_TAR_TOPIC = "/_bbs3d_ros2_test/tar_points_renamed"
-# load_tar_clouds + 1s sleep + publish の流れで余裕を見て 20s。
-RECEIVE_TIMEOUT_SEC = 20.0
+
+# Step 9 の各 yaml キーをこの値にリネームする。default (`/tar_points` 等)
+# とは別の擬似プライベート名前空間を使い、他テスト / 外部 publisher と衝突
+# させない。
+RENAMED = {
+    "tar_points_topic_name": "/_bbs3d_ros2_test/tar_points_renamed",
+    "src_points_on_global_pose_topic_name":
+        "/_bbs3d_ros2_test/src_points_renamed",
+    "global_pose_topic_name": "/_bbs3d_ros2_test/global_pose_renamed",
+    "score_topic_name": "/_bbs3d_ros2_test/score_renamed",
+    "time_topic_name": "/_bbs3d_ros2_test/time_renamed",
+    "localize_topic_name": "/_bbs3d_ros2_test/localize_renamed",
+}
+# yaml で全部リネームしたとき、これらの default 名は graph から消えていること。
+DEFAULT_PUB_TOPICS = {
+    "/tar_points",
+    "/src_points_on_global_pose",
+    "/global_pose",
+    "/score",
+    "/time",
+}
+# 起動(PCD load + voxelmap 構築)と ROS 2 graph discovery の両方を吸収する。
+DISCOVERY_TIMEOUT_SEC = 20.0
 
 DATA_AVAILABLE = DATA_DIR.exists() and any(DATA_DIR.glob("*.pcd"))
 REQUIRE_DATA = os.environ.get("BBS3D_REQUIRE_TEST_DATA", "").lower() in (
@@ -43,8 +64,10 @@ def _launch_with_node():
     text = FIXTURE_YAML.read_text().replace(
         "__TARGET_CLOUDS_PATH__", str(DATA_DIR)
     )
-    # fixture yaml に Step 9 の新キーを追記。これが反映されるかが本テストの観点。
-    text += f'\ntar_points_topic_name: "{RENAMED_TAR_TOPIC}"\n'
+    rename_block = "\n".join(
+        f'{key}: "{value}"' for key, value in RENAMED.items()
+    )
+    text += "\n" + rename_block + "\n"
     tmp = tempfile.NamedTemporaryFile(
         mode="w", suffix=".yaml", delete=False, prefix="bbs3d_topic_cfg_"
     )
@@ -79,7 +102,7 @@ def generate_test_description():
     return _launch_empty()
 
 
-class TestRenamedTopicPublishes(unittest.TestCase):
+class TestRenamedTopicNames(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         rclpy.init()
@@ -89,39 +112,77 @@ class TestRenamedTopicPublishes(unittest.TestCase):
         rclpy.shutdown()
 
     def setUp(self):
-        self.listener_node = rclpy.create_node("test_topic_name_listener")
-        self.received = []
-        self.listener_node.create_subscription(
-            PointCloud2,
-            RENAMED_TAR_TOPIC,
-            lambda msg: self.received.append(msg),
-            10,
-        )
+        self.observer_node = rclpy.create_node("test_topic_name_observer")
 
     def tearDown(self):
-        self.listener_node.destroy_node()
+        self.observer_node.destroy_node()
 
-    def test_tar_points_publishes_on_renamed_topic(self, node, tmp_yaml):
+    def _wait_for(self, predicate, timeout_sec):
+        # ROS 2 graph discovery が反映されるまで polling する。
+        end_ns = (
+            self.observer_node.get_clock().now().nanoseconds
+            + int(timeout_sec * 1e9)
+        )
+        while self.observer_node.get_clock().now().nanoseconds < end_ns:
+            if predicate():
+                return True
+            rclpy.spin_once(self.observer_node, timeout_sec=0.2)
+        return predicate()
+
+    def test_topic_names_match_yaml(self, node, tmp_yaml):
         if not DATA_AVAILABLE:
             self.skipTest(
                 f"Test data not found at {DATA_DIR}. "
                 "Download per 3d_bbs/ros2_test/ros2_test_code.md."
             )
-        end_time = (
-            self.listener_node.get_clock().now().nanoseconds
-            + int(RECEIVE_TIMEOUT_SEC * 1e9)
+        expected = set(RENAMED.values())  # 5 pubs + 1 sub (localize Bool topic)
+
+        def all_present():
+            current = {
+                t[0] for t in self.observer_node.get_topic_names_and_types()
+            }
+            return expected.issubset(current)
+
+        ok = self._wait_for(all_present, DISCOVERY_TIMEOUT_SEC)
+        current = {
+            t[0] for t in self.observer_node.get_topic_names_and_types()
+        }
+        missing = expected - current
+        self.assertTrue(
+            ok,
+            f"Renamed topics not all visible within {DISCOVERY_TIMEOUT_SEC}s. "
+            f"Missing: {sorted(missing)}",
         )
-        while (
-            not self.received
-            and self.listener_node.get_clock().now().nanoseconds < end_time
-        ):
-            rclpy.spin_once(self.listener_node, timeout_sec=0.5)
-        self.assertGreater(
-            len(self.received),
-            0,
-            f"No msg received on {RENAMED_TAR_TOPIC} within "
-            f"{RECEIVE_TIMEOUT_SEC}s — yaml の tar_points_topic_name "
-            "が反映されていない可能性がある",
+        leaked = DEFAULT_PUB_TOPICS & current
+        self.assertFalse(
+            leaked,
+            f"Default topic names still present despite yaml renames: "
+            f"{sorted(leaked)}",
+        )
+
+    def test_localize_service_name_matches_yaml(self, node, tmp_yaml):
+        if not DATA_AVAILABLE:
+            self.skipTest(
+                f"Test data not found at {DATA_DIR}. "
+                "Download per 3d_bbs/ros2_test/ros2_test_code.md."
+            )
+        expected = RENAMED["localize_topic_name"]
+
+        def service_present():
+            current = {
+                s[0]
+                for s in self.observer_node.get_service_names_and_types()
+            }
+            return expected in current
+
+        ok = self._wait_for(service_present, DISCOVERY_TIMEOUT_SEC)
+        current = {
+            s[0] for s in self.observer_node.get_service_names_and_types()
+        }
+        self.assertTrue(
+            ok,
+            f"Renamed service {expected} not visible within "
+            f"{DISCOVERY_TIMEOUT_SEC}s. Services found: {sorted(current)}",
         )
 
 
