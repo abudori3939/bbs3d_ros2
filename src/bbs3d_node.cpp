@@ -69,8 +69,7 @@ bool Bbs3dNode::load_config(const std::string & config)
   // Step 9: 出力 / トリガートピック名。yaml に無ければ上流互換のデフォルト。
   tar_points_topic_name =
     get_or(conf, "tar_points_topic_name", "/tar_points");
-  src_points_on_global_pose_topic_name =
-    get_or(
+  src_points_on_global_pose_topic_name = get_or(
     conf, "src_points_on_global_pose_topic_name",
     "/src_points_on_global_pose");
   global_pose_topic_name =
