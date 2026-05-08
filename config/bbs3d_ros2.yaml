@@ -42,3 +42,12 @@ max_scan_range: 100.0 # [m]
 ## Timeout [msec]
 # Enter the number as int
 timeout_msec: 0 # off: 0
+
+## Topic / Service names (defaults match upstream ros2_test/rviz2)
+## Uncomment and edit to override. Defaults are used when commented out.
+# tar_points_topic_name: "/tar_points"
+# src_points_on_global_pose_topic_name: "/src_points_on_global_pose"
+# global_pose_topic_name: "/global_pose"
+# score_topic_name: "/score"
+# time_topic_name: "/time"
+# localize_topic_name: "~/localize"   # used for both Bool topic and Trigger service

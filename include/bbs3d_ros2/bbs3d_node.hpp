@@ -104,6 +104,15 @@ private:
   // Config
   std::string tar_path;
   std::string lidar_topic_name, imu_topic_name;
+  // Step 9: yaml で変更可能な出力 / トリガートピック名。yaml に当該キーが
+  // 無ければ load_config 内で上流互換のデフォルト値が当てられる。
+  // localize_topic_name は Bool topic と Trigger service の両方に使う。
+  std::string tar_points_topic_name;
+  std::string src_points_on_global_pose_topic_name;
+  std::string global_pose_topic_name;
+  std::string score_topic_name;
+  std::string time_topic_name;
+  std::string localize_topic_name;
   double min_level_res;
   int max_level;
   Eigen::Vector3d min_rpy;

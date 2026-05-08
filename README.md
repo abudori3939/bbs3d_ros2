@@ -132,6 +132,8 @@ ros2 service call /bbs3d_ros2_node/localize std_srvs/srv/Trigger {}
 
 ## ROS 2 インタフェース
 
+> 下表の Topic / Service 名はすべて [`config/bbs3d_ros2.yaml`](config/bbs3d_ros2.yaml) で変更可能です。yaml キーと既定値は [`## 設定`](#設定-configbbs3d_ros2yaml) を参照。
+
 ### Subscriptions
 | Topic | Type | 用途 |
 |---|---|---|
@@ -172,6 +174,14 @@ ros2 service call /bbs3d_ros2_node/localize std_srvs/srv/Trigger {}
 | `tar_leaf_size` / `src_leaf_size` | ダウンサンプル(0.0 で off) |
 | `min_scan_range` / `max_scan_range` | source 点群のクロップ [m] |
 | `timeout_msec` | 探索タイムアウト(0 で off) |
+| `tar_points_topic_name` | target 点群 publisher 名(既定 `/tar_points`) |
+| `src_points_on_global_pose_topic_name` | source 点群 publisher 名(既定 `/src_points_on_global_pose`) |
+| `global_pose_topic_name` | 推定 pose publisher 名(既定 `/global_pose`) |
+| `score_topic_name` | best score publisher 名(既定 `/score`) |
+| `time_topic_name` | 実行時間 publisher 名(既定 `/time`) |
+| `localize_topic_name` | トリガ Bool topic + Trigger service の共通名(既定 `~/localize`) |
+
+> Topic / Service 名は既定で `config/bbs3d_ros2.yaml` 内ではコメントアウトされています(=既定値で動く)。変更したい行の `#` を外して値を書き換えてください。
 
 ## トラブルシューティング
 
