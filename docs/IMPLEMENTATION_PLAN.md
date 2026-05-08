@@ -223,6 +223,8 @@ launch / rviz / config 設定のみの変更。TDD 対象外。
   - `localize_topic_name`(default `~/localize`、Step 7 でリネーム済。Bool topic と Trigger service の両方に適用)
 - [x] `Bbs3dNode` で yaml から読み込み、サブスクリプション / パブリッシャーを設定。`get_or(YAML::Node, key, default)` ヘルパで「key が無ければ default」とし、既存ユーザの yaml(これらのキーが無い)が壊れない設計にした。
 - [x] テスト: `test/test_topic_name_config.py` で fixture yaml に 6 項目をリネーム指定して起動 → ROS graph の `get_topic_names_and_types` / `get_service_names_and_types` で renamed 名が現れること、default 名が消えていることを assert。
+- [ ] **未対応(将来 follow-up PR)**:
+  - 空文字 yaml 値の防御(PR #10 review): `tar_points_topic_name: ""` 等で `create_publisher("", ...)` が rclcpp 例外を吐く。`get_or` を空文字も default 扱いするか、`load_config` 全体で空文字を明示 RuntimeError にするか、設計判断が必要。`lidar_topic_name` / `imu_topic_name` 等既存項目も同じ問題を抱えるため、Step 9 単独で局所最適化せず、Step 10 完了後の cleanup PR で `load_config` 全体を強化する候補。
 - DoD: 全トピック名がデフォルト動作を変えずに yaml で変更可能 ✅。
 
 ### Step 10 — target 点群の topic モード対応(地図ホットスワップ)  🟡 未着手
