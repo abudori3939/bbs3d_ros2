@@ -44,13 +44,19 @@ RENAMED = {
     "localize_topic_name": "/_bbs3d_ros2_test/localize_renamed",
 }
 # yaml で全部リネームしたとき、これらの default 名は graph から消えていること。
-DEFAULT_PUB_TOPICS = {
+# 5 publisher + 1 Bool subscription(`~/localize` をノード名前空間で解決した名前)。
+# `get_topic_names_and_types()` は pub / sub を区別せず graph 全体を返すため、
+# Bool sub の default もこの集合で leak 検査できる。
+DEFAULT_TOPIC_NAMES = {
     "/tar_points",
     "/src_points_on_global_pose",
     "/global_pose",
     "/score",
     "/time",
+    "/bbs3d_ros2_node/localize",
 }
+# rename 後に消えていることを確認したい default Service 名(`~/localize` 解決後)。
+DEFAULT_SERVICE_NAME = "/bbs3d_ros2_node/localize"
 # 起動(PCD load + voxelmap 構築)と ROS 2 graph discovery の両方を吸収する。
 DISCOVERY_TIMEOUT_SEC = 20.0
 
@@ -153,7 +159,7 @@ class TestRenamedTopicNames(unittest.TestCase):
             f"Renamed topics not all visible within {DISCOVERY_TIMEOUT_SEC}s. "
             f"Missing: {sorted(missing)}",
         )
-        leaked = DEFAULT_PUB_TOPICS & current
+        leaked = DEFAULT_TOPIC_NAMES & current
         self.assertFalse(
             leaked,
             f"Default topic names still present despite yaml renames: "
@@ -183,6 +189,11 @@ class TestRenamedTopicNames(unittest.TestCase):
             ok,
             f"Renamed service {expected} not visible within "
             f"{DISCOVERY_TIMEOUT_SEC}s. Services found: {sorted(current)}",
+        )
+        self.assertNotIn(
+            DEFAULT_SERVICE_NAME, current,
+            f"Default service {DEFAULT_SERVICE_NAME} still present despite "
+            f"yaml rename to {expected}.",
         )
 
 
