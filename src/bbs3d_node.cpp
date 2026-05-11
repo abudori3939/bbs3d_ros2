@@ -61,7 +61,23 @@ bool Bbs3dNode::load_config(const std::string & config)
   YAML::Node conf = YAML::LoadFile(config);
 
   RCLCPP_INFO(get_logger(), "Loading paths...");
-  tar_path = conf["target_clouds"].as<std::string>();
+  // Step 10: target_source_mode == "pcd" のときのみ target_clouds を必須とする。
+  // topic モードでは PCD を読まないため空欄でも load_config を通す。
+  target_source_mode = get_or(conf, "target_source_mode", "pcd");
+  if (target_source_mode != "pcd" && target_source_mode != "topic") {
+    RCLCPP_ERROR(
+      get_logger(),
+      "target_source_mode must be 'pcd' or 'topic', got '%s'",
+      target_source_mode.c_str());
+    return false;
+  }
+  if (target_source_mode == "pcd") {
+    tar_path = conf["target_clouds"].as<std::string>();
+  } else {
+    tar_path.clear();
+  }
+  target_cloud_topic_name =
+    get_or(conf, "target_cloud_topic_name", "/target_cloud");
 
   RCLCPP_INFO(get_logger(), "Loading topic name...");
   lidar_topic_name = conf["lidar_topic_name"].as<std::string>();
@@ -162,6 +178,59 @@ void Bbs3dNode::load_target_clouds_pcd()
   }
 }
 
+// Step 10: topic モードで target 点群を受信するたびに呼ばれる。bbs3d_mutex_ を保持
+// したまま voxelmap を再構築するため、再構築中の localize は try_lock 失敗で busy
+// reason を返す(run_localization 側)。callback はそのまま待つ(lock_guard)。
+void Bbs3dNode::target_cloud_callback(
+  const sensor_msgs::msg::PointCloud2::SharedPtr msg)
+{
+  std::lock_guard<std::mutex> lock(bbs3d_mutex_);
+
+  const size_t in_size = static_cast<size_t>(msg->width) * msg->height;
+  RCLCPP_INFO(
+    get_logger(),
+    "Received target cloud (%zu points), rebuilding voxelmap...", in_size);
+  const auto t0 = std::chrono::steady_clock::now();
+
+  pcl::PointCloud<pcl::PointXYZ>::Ptr tar_cloud_ptr(
+    new pcl::PointCloud<pcl::PointXYZ>());
+  pcl::fromROSMsg(*msg, *tar_cloud_ptr);
+
+  // pcd モードと同じ前処理: tar_leaf_size > 0 なら voxel filter で downsample。
+  if (tar_leaf_size > 0.0f) {
+    pcl::PointCloud<pcl::PointXYZ>::Ptr filtered(
+      new pcl::PointCloud<pcl::PointXYZ>());
+    pcl::VoxelGrid<pcl::PointXYZ> voxel;
+    voxel.setLeafSize(tar_leaf_size, tar_leaf_size, tar_leaf_size);
+    voxel.setInputCloud(tar_cloud_ptr);
+    voxel.filter(*filtered);
+    tar_cloud_ptr = filtered;
+  }
+
+  std::vector<Eigen::Vector3f> tar_points;
+  pciof::pcl_to_eigen(tar_cloud_ptr, tar_points);
+  if (tar_points.empty()) {
+    RCLCPP_WARN(
+      get_logger(),
+      "Received target cloud is empty after downsample, ignoring");
+    return;
+  }
+  gpu_bbs3d.set_tar_points(tar_points, min_level_res, max_level);
+  gpu_bbs3d.set_trans_search_range(tar_points);
+  tar_points_loaded_ = true;
+
+  const auto build_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+    std::chrono::steady_clock::now() - t0).count();
+  RCLCPP_INFO(
+    get_logger(),
+    "Target voxelmap rebuilt: %zu points in %ld ms",
+    tar_points.size(), build_ms);
+
+  // tar_points_topic_name にも echo して RViz 表示用に流す。
+  tar_points_pub_->publish(*msg);
+  broadcast_viewer_frame(tar_points);
+}
+
 Bbs3dNode::Bbs3dNode(const rclcpp::NodeOptions & options)
 : Node("bbs3d_ros2_node", options),
   tf2_broadcaster_(*this)
@@ -205,9 +274,24 @@ Bbs3dNode::Bbs3dNode(const rclcpp::NodeOptions & options)
   score_pub_ = this->create_publisher<std_msgs::msg::Int32>(score_topic_name, 10);
   time_pub_ = this->create_publisher<std_msgs::msg::Float32>(time_topic_name, 10);
 
-  // PCD ロード + voxelmap 構築。Step 10 で target_source_mode == "pcd" の場合のみ
-  // 呼び出すよう if でラップする想定。失敗時は throw。
-  load_target_clouds_pcd();
+  // Step 10: target_source_mode で分岐。pcd モードは起動時に PCD から voxelmap
+  // 構築(既存挙動)。topic モードは subscriber を作って待機し、target_cloud_callback
+  // で動的に voxelmap を構築する。
+  tar_points_loaded_ = false;
+  if (target_source_mode == "pcd") {
+    load_target_clouds_pcd();
+    tar_points_loaded_ = true;
+  } else {
+    rclcpp::QoS qos(rclcpp::KeepLast(1));
+    qos.transient_local();
+    qos.reliable();
+    target_cloud_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
+      target_cloud_topic_name, qos,
+      std::bind(&Bbs3dNode::target_cloud_callback, this, std::placeholders::_1));
+    RCLCPP_INFO(
+      get_logger(), "topic mode: waiting for target on %s",
+      target_cloud_topic_name.c_str());
+  }
 
   gpu_bbs3d.set_angular_search_range(min_rpy.cast<float>(), max_rpy.cast<float>());
   gpu_bbs3d.set_score_threshold_percentage(static_cast<float>(score_threshold_percentage));
@@ -255,8 +339,20 @@ void Bbs3dNode::broadcast_viewer_frame(const std::vector<Eigen::Vector3f> & poin
 // 失敗時は LocalizeResult.message に正規化された reason 文字列を載せて返す。
 Bbs3dNode::LocalizeResult Bbs3dNode::run_localization()
 {
+  // Step 10: gpu_bbs3d への全アクセスを排他。target_cloud_callback が再構築中なら
+  // try_lock 失敗 → busy reason を返す(クライアントが retry 判断)。取得できた場合
+  // unique_lock は関数末尾まで保持され、gpu_bbs3d.localize() 実行中も lock 中
+  // (= set_tar_points と並行しない)。
+  std::unique_lock<std::mutex> bbs3d_lock(bbs3d_mutex_, std::try_to_lock);
+  if (!bbs3d_lock.owns_lock()) {
+    return {false, "target map reloading"};
+  }
+  if (!tar_points_loaded_) {
+    return {false, "target map not loaded"};
+  }
+
   // 共有状態(source_cloud_msg_ / imu_buffer / *_last_received_)を mutex で snapshot
-  // して、以降の重い処理は lock 解放後に行う。
+  // して、以降の重い処理は lock 解放後に行う(bbs3d_lock より内側の短時間 lock)。
   sensor_msgs::msg::PointCloud2::SharedPtr cloud_msg;
   std::vector<sensor_msgs::msg::Imu> imu_snapshot;
   rclcpp::Time lidar_t;
