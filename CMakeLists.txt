@@ -85,6 +85,7 @@ if(BUILD_TESTING)
   add_launch_test(test/test_localize_service.py TIMEOUT 30)
   add_launch_test(test/test_bad_pcd_path.py TIMEOUT 30)
   add_launch_test(test/test_topic_name_config.py TIMEOUT 60)
+  add_launch_test(test/test_target_source_mode.py TIMEOUT 90)
 endif()
 
 ament_auto_package(
