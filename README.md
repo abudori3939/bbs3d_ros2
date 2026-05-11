@@ -130,6 +130,21 @@ ros2 service call /bbs3d_ros2_node/localize std_srvs/srv/Trigger {}
 - `lidar_topic_name` / `imu_topic_name` を自分の sensor のトピック名に書き換える
 - 探索範囲(`min_rpy` / `max_rpy`)・解像度(`min_level_res`)・スコア閾値などをチューニング(本家 README 参照)
 
+### 地図ホットスワップ(topic モード)
+階層移動や広大地図の分割切替で、**ノード再起動なしに target を切り替えたい** 場合は `target_source_mode: "topic"` を使います。
+
+```yaml
+# config/bbs3d_ros2.yaml
+target_source_mode: "topic"
+target_cloud_topic_name: "/target_cloud"   # 任意の topic 名に変更可
+```
+
+`target_clouds` 行は不要(無視されます)。起動後はノードログに `topic mode: waiting for target on /target_cloud` が出てトリガ待ち状態となり、target topic に PointCloud2 が来るたびに voxelmap を再構築します。送信側は `transient_local`+`reliable` QoS で publish してください(`ros2 bag play` の単発送信や latched publisher で OK)。
+
+- target 未受信状態で `~/localize` を叩くと `response.message == "target map not loaded"`
+- 再構築中(数秒)に `~/localize` を叩くと `response.message == "target map reloading"`(retry してください)
+- 再構築完了後の localize は通常通り動作
+
 ## ROS 2 インタフェース
 
 > 下表の Topic / Service 名はすべて [`config/bbs3d_ros2.yaml`](config/bbs3d_ros2.yaml) で変更可能です。yaml キーと既定値は [`## 設定`](#設定-configbbs3d_ros2yaml) を参照。
@@ -140,6 +155,7 @@ ros2 service call /bbs3d_ros2_node/localize std_srvs/srv/Trigger {}
 | `~/localize`(完全修飾 `/bbs3d_ros2_node/localize`) | `std_msgs/msg/Bool` | `data: true` でグローバル位置推定をトリガ |
 | `<lidar_topic_name>`(サンプル `/livox/points`) | `sensor_msgs/msg/PointCloud2` | source 点群 |
 | `<imu_topic_name>`(サンプル `/livox/imu`) | `sensor_msgs/msg/Imu` | 重力方向アライメント用 |
+| `<target_cloud_topic_name>`(既定 `/target_cloud`、`target_source_mode: "topic"` 時のみ) | `sensor_msgs/msg/PointCloud2` | target 点群を topic で受け取り voxelmap を動的に再構築(地図ホットスワップ)。QoS は `transient_local`+`reliable` |
 
 ### Publications
 | Topic | Type | 用途 |
@@ -153,7 +169,7 @@ ros2 service call /bbs3d_ros2_node/localize std_srvs/srv/Trigger {}
 ### Services
 | Service | Type | 用途 |
 |---|---|---|
-| `~/localize`(完全修飾 `/bbs3d_ros2_node/localize`) | `std_srvs/srv/Trigger` | グローバル位置推定をトリガ。失敗時は `response.message` に reason(`"point cloud not received"`、`"imu not received"`、`"localization timed out"`、`"score below threshold"`)を返す |
+| `~/localize`(完全修飾 `/bbs3d_ros2_node/localize`) | `std_srvs/srv/Trigger` | グローバル位置推定をトリガ。失敗時は `response.message` に reason(`"point cloud not received"`、`"imu not received"`、`"localization timed out"`、`"score below threshold"`、`"target map not loaded"`、`"target map reloading"`)を返す |
 
 > Topic と Service は ROS 2 で別名前空間に属するため、同じ完全修飾名で共存できます。`ros2 topic pub` か `ros2 service call` かで型に応じた呼び出しになります。
 
@@ -180,6 +196,8 @@ ros2 service call /bbs3d_ros2_node/localize std_srvs/srv/Trigger {}
 | `score_topic_name` | best score publisher 名(既定 `/score`) |
 | `time_topic_name` | 実行時間 publisher 名(既定 `/time`) |
 | `localize_topic_name` | トリガ Bool topic + Trigger service の共通名(既定 `~/localize`) |
+| `target_source_mode` | target 点群の入手元(既定 `pcd`、または `topic` で動的受信) |
+| `target_cloud_topic_name` | topic モードで subscribe する target トピック名(既定 `/target_cloud`、`transient_local` QoS)|
 
 > Topic / Service 名は既定で `config/bbs3d_ros2.yaml` 内ではコメントアウトされています(=既定値で動く)。変更したい行の `#` を外して値を書き換えてください。
 

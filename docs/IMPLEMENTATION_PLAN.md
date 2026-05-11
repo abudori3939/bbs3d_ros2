@@ -227,20 +227,21 @@ launch / rviz / config 設定のみの変更。TDD 対象外。
   - 空文字 yaml 値の防御(PR #10 review): `tar_points_topic_name: ""` 等で `create_publisher("", ...)` が rclcpp 例外を吐く。`get_or` を空文字も default 扱いするか、`load_config` 全体で空文字を明示 RuntimeError にするか、設計判断が必要。`lidar_topic_name` / `imu_topic_name` 等既存項目も同じ問題を抱えるため、Step 9 単独で局所最適化せず、Step 10 完了後の cleanup PR で `load_config` 全体を強化する候補。
 - DoD: 全トピック名がデフォルト動作を変えずに yaml で変更可能 ✅。
 
-### Step 10 — target 点群の topic モード対応(地図ホットスワップ)  🟡 未着手
+### Step 10 — target 点群の topic モード対応(地図ホットスワップ)  ✅ 完了
 **TDD 適用**。
 
-- [ ] `config/bbs3d_ros2.yaml` に以下を追加:
+- [x] `config/bbs3d_ros2.yaml` に以下を追加(Optional セクションにコメントアウト形式で記載、外せば反映):
   - `target_source_mode: "pcd"` または `"topic"`(default `pcd`)
   - `target_cloud_topic_name`(default `/target_cloud`、topic モードのみ参照)
-- [ ] `pcd` モード:既存挙動(起動時に `target_clouds` パスから PCD ロード)。
-- [ ] `topic` モード:
-  - `transient_local` QoS で `target_cloud_topic_name` を sub。
-  - 受信のたびに `gpu_bbs3d.set_tar_points()` を呼び直して voxelmap を再構築(地図ホットスワップ)。
-  - 起動時はマップ未設定で待機し、未受信状態で `/click_loc` / `~/localize` が来たら明示的に「地図未設定」エラーを返す(Step 8 のエラーハンドリングと連携)。
-  - 再構築中は localize リクエストをブロック / 拒否する(競合防止)。実装方針(mutex か state machine か)は実装時に判断。
-- [ ] テスト: 各モードで地図が正しく設定されること、topic モードで再受信時に切替わること、未受信時にエラーが返ること。
-- DoD: 動作中に `ros2 topic pub` で地図を切替できる。
+- [x] `pcd` モード:既存挙動(起動時に `target_clouds` パスから PCD ロード)。回帰なし(smoke / bad_pcd_path / localize_service / topic_name_config 全 PASS で確認)。
+- [x] `topic` モード:
+  - `transient_local`+`reliable` QoS で `target_cloud_topic_name` を sub。
+  - 受信のたびに `pcl::VoxelGrid`(`tar_leaf_size > 0` 時)→ `gpu_bbs3d.set_tar_points()` + `set_trans_search_range()` で voxelmap を再構築(地図ホットスワップ)。受信点群は `tar_points_topic_name` にも echo して RViz 表示用に流す。
+  - 起動時は `tar_points_loaded_ = false` で待機し、未受信状態で `~/localize` が来たら `response.message == "target map not loaded"` を返す。
+  - 再構築中の localize は `bbs3d_mutex_` の `try_to_lock` 失敗で `"target map reloading"` を返す(retry はクライアント判断)。
+- [x] **Mutex 設計**: 既存 `state_mutex_`(短時間 lock 用)とは別に `bbs3d_mutex_` を導入。上流 `gpu::BBS3D` が thread-safe でないため、`set_tar_points` / `localize` の並行実行をクライアント側で完全に排他する責務を負う。`target_cloud_callback` は `lock_guard` で保持(localize 中なら待つ)、`run_localization` は `unique_lock(try_to_lock)` を関数末尾まで保持(`gpu_bbs3d.localize()` 実行中も lock 中 = `set_tar_points` と並行しない)。
+- [x] テスト: `test/test_target_source_mode.py`(topic モードで起動 → graph に sub が現れる / target 未受信状態の localize で `"target map not loaded"` reason / target publish 後にガードを抜けて別 reason に遷移)。
+- DoD: 動作中に `ros2 topic pub` で地図を切替できる ✅。
 
 ---
 
