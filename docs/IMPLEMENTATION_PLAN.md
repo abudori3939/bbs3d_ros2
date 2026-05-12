@@ -236,11 +236,12 @@ launch / rviz / config 設定のみの変更。TDD 対象外。
 - [x] `pcd` モード:既存挙動(起動時に `target_clouds` パスから PCD ロード)。回帰なし(smoke / bad_pcd_path / localize_service / topic_name_config 全 PASS で確認)。
 - [x] `topic` モード:
   - `transient_local`+`reliable` QoS で `target_cloud_topic_name` を sub。
-  - 受信のたびに `pcl::VoxelGrid`(`tar_leaf_size > 0` 時)→ `gpu_bbs3d.set_tar_points()` + `set_trans_search_range()` で voxelmap を再構築(地図ホットスワップ)。受信点群は `tar_points_topic_name` にも echo して RViz 表示用に流す。
+  - 受信のたびに `pcl::VoxelGrid`(`tar_leaf_size > 0` 時)→ `gpu_bbs3d.set_tar_points()` + `set_trans_search_range()` で voxelmap を再構築(地図ホットスワップ)。echo は `tar_points_topic_name` に **downsample 後の点群** を `pcl::toROSMsg` で publish(pcd モードと同じ不変条件:`<tar_points_topic_name>` に流れる cloud = voxelmap に登録された cloud)。
   - 起動時は `tar_points_loaded_ = false` で待機し、未受信状態で `~/localize` が来たら `response.message == "target map not loaded"` を返す。
-  - 再構築中の localize は `bbs3d_mutex_` の `try_to_lock` 失敗で `"target map reloading"` を返す(retry はクライアント判断)。
-- [x] **Mutex 設計**: 既存 `state_mutex_`(短時間 lock 用)とは別に `bbs3d_mutex_` を導入。上流 `gpu::BBS3D` が thread-safe でないため、`set_tar_points` / `localize` の並行実行をクライアント側で完全に排他する責務を負う。`target_cloud_callback` は `lock_guard` で保持(localize 中なら待つ)、`run_localization` は `unique_lock(try_to_lock)` を関数末尾まで保持(`gpu_bbs3d.localize()` 実行中も lock 中 = `set_tar_points` と並行しない)。
-- [x] テスト: `test/test_target_source_mode.py`(topic モードで起動 → graph に sub が現れる / target 未受信状態の localize で `"target map not loaded"` reason / target publish 後にガードを抜けて別 reason に遷移)。
+  - 再構築中の localize は `bbs3d_mutex_` を `lock_guard` で取得するため、callback 完了まで blocking で待つ(API は「localize 呼出は再構築完了まで待つ」というシンプルな約束)。
+- [x] **Mutex 設計**: 既存 `state_mutex_`(短時間 lock 用)とは別に `bbs3d_mutex_` を導入。上流 `gpu::BBS3D` が thread-safe でないため、`set_tar_points` / `localize` の並行実行をクライアント側で完全に排他する責務を負う。`target_cloud_callback` と `run_localization` は共に `lock_guard` で取得し、再構築中の localize は callback 完了まで block。SingleThreadedExecutor 下では callback 直列化で競合は構造的に発生しないが、将来 MultiThreaded 化された場合の防御として lock を残す。
+- [x] テスト: `test/test_target_source_mode.py`(topic モードで起動 → graph に sub が現れる / target 未受信状態の localize で `"target map not loaded"` reason / target publish 後にガードを抜けて別 reason に遷移)。専用 fixture `bbs3d_ros2_test_topic_mode.yaml` を分離し、PCD ファイル不要で CI で常に実行される。
+- [x] **PR #11 レビュー対応 follow-up**(2026-05-12): 初版で導入した `unique_lock(try_to_lock)` + `"target map reloading"` reason は、SingleThreadedExecutor + default callback group では到達不能であることが判明したため、`lock_guard` で待つ semantics に変更し reloading reason を削除。同時に topic モードの echo を downsample 後の点群に揃え(pcd 側と一致)、テスト fixture を分離して PCD 依存を撤去。
 - DoD: 動作中に `ros2 topic pub` で地図を切替できる ✅。
 
 ---

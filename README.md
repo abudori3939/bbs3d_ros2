@@ -142,7 +142,7 @@ target_cloud_topic_name: "/target_cloud"   # 任意の topic 名に変更可
 `target_clouds` 行は不要(無視されます)。起動後はノードログに `topic mode: waiting for target on /target_cloud` が出てトリガ待ち状態となり、target topic に PointCloud2 が来るたびに voxelmap を再構築します。送信側は `transient_local`+`reliable` QoS で publish してください(`ros2 bag play` の単発送信や latched publisher で OK)。
 
 - target 未受信状態で `~/localize` を叩くと `response.message == "target map not loaded"`
-- 再構築中(数秒)に `~/localize` を叩くと `response.message == "target map reloading"`(retry してください)
+- 再構築中(数秒)に `~/localize` を叩くと **再構築完了まで blocking で待たされた後** に通常 localize 結果が返る(クライアント側のタイムアウトは future の `wait_for` 等で制御してください)
 - 再構築完了後の localize は通常通り動作
 
 ## ROS 2 インタフェース
@@ -169,7 +169,7 @@ target_cloud_topic_name: "/target_cloud"   # 任意の topic 名に変更可
 ### Services
 | Service | Type | 用途 |
 |---|---|---|
-| `~/localize`(完全修飾 `/bbs3d_ros2_node/localize`) | `std_srvs/srv/Trigger` | グローバル位置推定をトリガ。失敗時は `response.message` に reason(`"point cloud not received"`、`"imu not received"`、`"localization timed out"`、`"score below threshold"`、`"target map not loaded"`、`"target map reloading"`)を返す |
+| `~/localize`(完全修飾 `/bbs3d_ros2_node/localize`) | `std_srvs/srv/Trigger` | グローバル位置推定をトリガ。失敗時は `response.message` に reason(`"point cloud not received"`、`"imu not received"`、`"localization timed out"`、`"score below threshold"`、`"target map not loaded"`)を返す。topic モードで target 再構築中の呼出は再構築完了まで blocking で待つ |
 
 > Topic と Service は ROS 2 で別名前空間に属するため、同じ完全修飾名で共存できます。`ros2 topic pub` か `ros2 service call` かで型に応じた呼び出しになります。
 
