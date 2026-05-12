@@ -1,27 +1,23 @@
 """
 Target source mode test: topic モードで subscriber と未受信ガードが正しく動くか.
 
-fixture yaml に ``target_source_mode: "topic"`` と
-``target_cloud_topic_name: "/_bbs3d_ros2_test/target_renamed"`` を追記して
-``bbs3d_ros2_node`` を起動し、以下 2 点を検証する:
+専用 fixture ``bbs3d_ros2_test_topic_mode.yaml``(``target_clouds`` 行を含まず
+``target_source_mode: "topic"`` を持つ)を temp file に複製し、
+``target_cloud_topic_name`` を ``__TARGET_CLOUD_TOPIC__`` placeholder から
+擬似プライベート名に置換して ``bbs3d_ros2_node`` を起動する。
+
+検証項目:
 
 (a) ``target_cloud_topic_name`` で指定した名前の subscription が ROS graph
     に現れること(= topic モードで対応する sub が作られていること)。
 (b) ``target_clouds`` 未受信状態で Trigger service を呼ぶと ``success=false``
     かつ ``message == "target map not loaded"`` を返すこと(= localize 経路が
-    新しいガードを通っていること)。
+    target loaded ガードを通っていること)。
+(c) target を transient_local QoS で publish した後、ガードを抜けて別 reason
+    に遷移すること(= 受信 → voxelmap 再構築 → ガード解除のライフサイクル)。
 
-RED 時点(コード未実装): (a) 現状コードは ``target_source_mode`` を読まず、
-subscriber も作らないため graph に現れない → ``assertTrue`` が timeout で
-FAIL。(b) ``run_localization`` に target loaded ガードが無いので
-``"point cloud not received"`` を返す → ``assertEqual`` が文字列不一致で
-FAIL。ビルドは通り、実行時の振る舞い不一致で正当な RED となる。
-
-Skipped when test data (data/target/*.pcd) is not present locally:
-RED フェーズの現状コードは pcd モード固定で動くため ``target_clouds`` の
-有効パスが必要(GREEN 後は topic モードで PCD ロード不要になるが、テスト
-互換性を保つため他テストと同じ skip / fail パターンを使う)。
-``BBS3D_REQUIRE_TEST_DATA=1`` switches skip → fail (CI / strict mode).
+topic モードでは PCD ファイルを読まないため、test data の有無に関わらず
+CI で常に実行できる(他テスト群の DATA_AVAILABLE skip パターンとは独立)。
 """
 import os
 import tempfile
@@ -44,29 +40,23 @@ from std_msgs.msg import Header
 from std_srvs.srv import Trigger
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DATA_DIR = PROJECT_ROOT / "data" / "target"
-FIXTURE_YAML = PROJECT_ROOT / "test" / "fixtures" / "bbs3d_ros2_test.yaml"
+FIXTURE_YAML = (
+    PROJECT_ROOT / "test" / "fixtures" / "bbs3d_ros2_test_topic_mode.yaml"
+)
 SERVICE_NAME = "/bbs3d_ros2_node/localize"
 TARGET_TOPIC_NAME = "/_bbs3d_ros2_test/target_renamed"
 
-# 起動(PCD load + voxelmap 構築)と graph discovery の合計を吸収する。
+# 起動と graph discovery の合計を吸収する。PCD ロード不要なので短めで足りる。
 DISCOVERY_TIMEOUT_SEC = 20.0
 SERVICE_AVAILABLE_TIMEOUT_SEC = 15.0
 RESPONSE_TIMEOUT_SEC = 10.0
 EXPECTED_NOT_LOADED_MESSAGE = "target map not loaded"
 
-DATA_AVAILABLE = DATA_DIR.exists() and any(DATA_DIR.glob("*.pcd"))
-REQUIRE_DATA = os.environ.get("BBS3D_REQUIRE_TEST_DATA", "").lower() in (
-    "1", "true", "yes",
-)
-
 
 def _launch_with_node():
     text = FIXTURE_YAML.read_text().replace(
-        "__TARGET_CLOUDS_PATH__", str(DATA_DIR)
+        "__TARGET_CLOUD_TOPIC__", TARGET_TOPIC_NAME
     )
-    text += '\ntarget_source_mode: "topic"\n'
-    text += f'target_cloud_topic_name: "{TARGET_TOPIC_NAME}"\n'
     tmp = tempfile.NamedTemporaryFile(
         mode="w", suffix=".yaml", delete=False, prefix="bbs3d_target_mode_"
     )
@@ -84,21 +74,9 @@ def _launch_with_node():
     return ld, {"node": node, "tmp_yaml": tmp.name}
 
 
-def _launch_empty():
-    ld = launch.LaunchDescription([launch_testing.actions.ReadyToTest()])
-    return ld, {"node": None, "tmp_yaml": None}
-
-
 @pytest.mark.launch_test
 def generate_test_description():
-    if not DATA_AVAILABLE and REQUIRE_DATA:
-        raise RuntimeError(
-            f"BBS3D_REQUIRE_TEST_DATA=1 but test data missing at {DATA_DIR}. "
-            "Download per 3d_bbs/ros2_test/ros2_test_code.md."
-        )
-    if DATA_AVAILABLE:
-        return _launch_with_node()
-    return _launch_empty()
+    return _launch_with_node()
 
 
 def _make_dummy_pointcloud2() -> PointCloud2:
@@ -137,12 +115,6 @@ class TestTargetSourceModeTopic(unittest.TestCase):
         return predicate()
 
     def test_target_subscription_present_at_startup(self, node, tmp_yaml):
-        if not DATA_AVAILABLE:
-            self.skipTest(
-                f"Test data not found at {DATA_DIR}. "
-                "Download per 3d_bbs/ros2_test/ros2_test_code.md."
-            )
-
         def target_sub_present():
             current = {
                 t[0] for t in self.observer_node.get_topic_names_and_types()
@@ -160,11 +132,6 @@ class TestTargetSourceModeTopic(unittest.TestCase):
         )
 
     def test_localize_rejected_before_target_received(self, node, tmp_yaml):
-        if not DATA_AVAILABLE:
-            self.skipTest(
-                f"Test data not found at {DATA_DIR}. "
-                "Download per 3d_bbs/ros2_test/ros2_test_code.md."
-            )
         client = self.observer_node.create_client(Trigger, SERVICE_NAME)
         self.assertTrue(
             client.wait_for_service(timeout_sec=SERVICE_AVAILABLE_TIMEOUT_SEC),
@@ -190,16 +157,10 @@ class TestTargetSourceModeTopic(unittest.TestCase):
         )
 
     def test_target_publish_unblocks_localize_guard(self, node, tmp_yaml):
-        # GREEN 確認用: target を transient_local QoS で publish した後、
+        # target を transient_local QoS で publish した後、
         # `target map not loaded` ガードを抜けて別 reason("point cloud not
-        # received" 等)を返すこと。RED 時点(現状コード)では guard 自体が
-        # 無いため最初の Trigger 呼び出しから "point cloud not received" を
-        # 返してしまい、`response_before` の assertEqual が FAIL する。
-        if not DATA_AVAILABLE:
-            self.skipTest(
-                f"Test data not found at {DATA_DIR}. "
-                "Download per 3d_bbs/ros2_test/ros2_test_code.md."
-            )
+        # received" 等)を返すことを確認する(= 受信 → voxelmap 再構築 →
+        # ガード解除のライフサイクル)。
         client = self.observer_node.create_client(Trigger, SERVICE_NAME)
         self.assertTrue(
             client.wait_for_service(timeout_sec=SERVICE_AVAILABLE_TIMEOUT_SEC),
