@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -39,6 +40,21 @@ std::string get_or(
   const YAML::Node & n, const std::string & key, const std::string & def)
 {
   return n[key] ? n[key].as<std::string>() : def;
+}
+
+// Step 10 follow-up: yaml の QoS 文字列 → rclcpp enum 変換。不正値は nullopt。
+std::optional<rclcpp::ReliabilityPolicy> parse_reliability(const std::string & s)
+{
+  if (s == "reliable") {return rclcpp::ReliabilityPolicy::Reliable;}
+  if (s == "best_effort") {return rclcpp::ReliabilityPolicy::BestEffort;}
+  return std::nullopt;
+}
+
+std::optional<rclcpp::DurabilityPolicy> parse_durability(const std::string & s)
+{
+  if (s == "transient_local") {return rclcpp::DurabilityPolicy::TransientLocal;}
+  if (s == "volatile") {return rclcpp::DurabilityPolicy::Volatile;}
+  return std::nullopt;
 }
 
 Eigen::Vector3d to_eigen(const std::vector<double> & vec)
@@ -78,6 +94,32 @@ bool Bbs3dNode::load_config(const std::string & config)
   }
   target_cloud_topic_name =
     get_or(conf, "target_cloud_topic_name", "/target_cloud");
+
+  // Step 10 follow-up: target_cloud sub QoS の reliability / durability を yaml で
+  // 切替可能化。default は REP-2003 Maps 推奨。pcl_ros 等 volatile publisher を
+  // 受信したい場合は yaml で "best_effort" / "volatile" に指定する。
+  const std::string reliability_str =
+    get_or(conf, "target_cloud_qos_reliability", "reliable");
+  const std::string durability_str =
+    get_or(conf, "target_cloud_qos_durability", "transient_local");
+  auto reliability = parse_reliability(reliability_str);
+  auto durability = parse_durability(durability_str);
+  if (!reliability) {
+    RCLCPP_ERROR(
+      get_logger(),
+      "target_cloud_qos_reliability must be 'reliable' or 'best_effort', got '%s'",
+      reliability_str.c_str());
+    return false;
+  }
+  if (!durability) {
+    RCLCPP_ERROR(
+      get_logger(),
+      "target_cloud_qos_durability must be 'transient_local' or 'volatile', got '%s'",
+      durability_str.c_str());
+    return false;
+  }
+  target_cloud_qos_reliability_ = *reliability;
+  target_cloud_qos_durability_ = *durability;
 
   RCLCPP_INFO(get_logger(), "Loading topic name...");
   lidar_topic_name = conf["lidar_topic_name"].as<std::string>();
@@ -288,8 +330,8 @@ Bbs3dNode::Bbs3dNode(const rclcpp::NodeOptions & options)
     tar_points_loaded_ = true;
   } else {
     rclcpp::QoS qos(rclcpp::KeepLast(1));
-    qos.transient_local();
-    qos.reliable();
+    qos.reliability(target_cloud_qos_reliability_);
+    qos.durability(target_cloud_qos_durability_);
     target_cloud_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
       target_cloud_topic_name, qos,
       std::bind(&Bbs3dNode::target_cloud_callback, this, std::placeholders::_1));

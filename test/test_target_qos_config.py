@@ -1,6 +1,5 @@
 """
-Target cloud QoS config test: yaml の target_cloud_qos_reliability /
-target_cloud_qos_durability が subscriber に反映されるか.
+Target cloud QoS config test: target_cloud_qos_* の yaml 設定が subscriber に反映されるか.
 
 fixture ``bbs3d_ros2_test_topic_mode_volatile.yaml`` を temp file に複製し、
 ``target_cloud_qos_reliability: "best_effort"`` と

@@ -58,3 +58,9 @@ timeout_msec: 0 # off: 0
 ##           受信のたびに voxelmap を再構築(地図ホットスワップ)
 # target_source_mode: "pcd"
 # target_cloud_topic_name: "/target_cloud"   # topic モードのみ参照
+
+## Target cloud QoS (Step 10 follow-up)
+## default は REP-2003 Maps 推奨の "reliable" + "transient_local"。pcl_ros 等
+## REP-2003 非準拠の publisher(volatile)と接続する場合は yaml で切替える。
+# target_cloud_qos_reliability: "reliable"          # "reliable" | "best_effort"
+# target_cloud_qos_durability:  "transient_local"   # "transient_local" | "volatile"

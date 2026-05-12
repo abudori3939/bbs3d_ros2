@@ -129,9 +129,14 @@ private:
   std::string time_topic_name;
   std::string localize_topic_name;
   // Step 10: target 点群の入手元。"pcd" は起動時に target_clouds パスから PCD ロード、
-  // "topic" は target_cloud_topic_name を transient_local QoS で subscribe。
+  // "topic" は target_cloud_topic_name を subscribe。
   std::string target_source_mode;
   std::string target_cloud_topic_name;
+  // Step 10 follow-up: target_cloud sub の QoS を yaml で切替可能(default は
+  // REP-2003 Maps 推奨の reliable + transient_local)。pcl_ros 等 REP-2003 非準拠
+  // publisher (volatile) と接続するために導入。
+  rclcpp::ReliabilityPolicy target_cloud_qos_reliability_;
+  rclcpp::DurabilityPolicy target_cloud_qos_durability_;
   double min_level_res;
   int max_level;
   Eigen::Vector3d min_rpy;
