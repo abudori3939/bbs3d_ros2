@@ -139,7 +139,16 @@ target_source_mode: "topic"
 target_cloud_topic_name: "/target_cloud"   # 任意の topic 名に変更可
 ```
 
-`target_clouds` 行は不要(無視されます)。起動後はノードログに `topic mode: waiting for target on /target_cloud` が出てトリガ待ち状態となり、target topic に PointCloud2 が来るたびに voxelmap を再構築します。送信側は `transient_local`+`reliable` QoS で publish してください(`ros2 bag play` の単発送信や latched publisher で OK)。
+`target_clouds` 行は不要(無視されます)。起動後はノードログに `topic mode: waiting for target on /target_cloud` が出てトリガ待ち状態となり、target topic に PointCloud2 が来るたびに voxelmap を再構築します。送信側 QoS の既定は [REP-2003 Maps 推奨](https://ros.org/reps/rep-2003.html) の `transient_local`+`reliable`(`ros2 bag play` の単発送信や latched publisher で OK)。
+
+`pcl_ros` 等の REP-2003 非準拠 publisher(`volatile`+`reliable` で送信、設定変更不可)と接続する場合は、subscriber 側 QoS を yaml で切替えます:
+
+```yaml
+target_cloud_qos_reliability: "best_effort"   # default: "reliable"
+target_cloud_qos_durability:  "volatile"      # default: "transient_local"
+```
+
+DDS の QoS マッチング規則(`pub.durability >= sub.durability`)で接続不可になっている場合は `ros2 topic info <target_cloud_topic_name> --verbose` で publisher 側 QoS を確認してください。
 
 - target 未受信状態で `~/localize` を叩くと `response.message == "target map not loaded"`
 - 再構築中(数秒)に `~/localize` を叩くと **再構築完了まで blocking で待たされた後** に通常 localize 結果が返る(クライアント側のタイムアウトは future の `wait_for` 等で制御してください)
@@ -155,7 +164,7 @@ target_cloud_topic_name: "/target_cloud"   # 任意の topic 名に変更可
 | `~/localize`(完全修飾 `/bbs3d_ros2_node/localize`) | `std_msgs/msg/Bool` | `data: true` でグローバル位置推定をトリガ |
 | `<lidar_topic_name>`(サンプル `/livox/points`) | `sensor_msgs/msg/PointCloud2` | source 点群 |
 | `<imu_topic_name>`(サンプル `/livox/imu`) | `sensor_msgs/msg/Imu` | 重力方向アライメント用 |
-| `<target_cloud_topic_name>`(既定 `/target_cloud`、`target_source_mode: "topic"` 時のみ) | `sensor_msgs/msg/PointCloud2` | target 点群を topic で受け取り voxelmap を動的に再構築(地図ホットスワップ)。QoS は `transient_local`+`reliable` |
+| `<target_cloud_topic_name>`(既定 `/target_cloud`、`target_source_mode: "topic"` 時のみ) | `sensor_msgs/msg/PointCloud2` | target 点群を topic で受け取り voxelmap を動的に再構築(地図ホットスワップ)。QoS は既定で REP-2003 Maps 推奨(`transient_local`+`reliable`)、yaml で変更可 |
 
 ### Publications
 | Topic | Type | 用途 |
@@ -197,7 +206,9 @@ target_cloud_topic_name: "/target_cloud"   # 任意の topic 名に変更可
 | `time_topic_name` | 実行時間 publisher 名(既定 `/time`) |
 | `localize_topic_name` | トリガ Bool topic + Trigger service の共通名(既定 `~/localize`) |
 | `target_source_mode` | target 点群の入手元(既定 `pcd`、または `topic` で動的受信) |
-| `target_cloud_topic_name` | topic モードで subscribe する target トピック名(既定 `/target_cloud`、`transient_local` QoS)|
+| `target_cloud_topic_name` | topic モードで subscribe する target トピック名(既定 `/target_cloud`)|
+| `target_cloud_qos_reliability` | target sub の reliability(既定 `"reliable"`、または `"best_effort"`)|
+| `target_cloud_qos_durability` | target sub の durability(既定 `"transient_local"` = REP-2003 Maps 推奨、または `"volatile"` = `pcl_ros` 等と接続用)|
 
 > Topic / Service 名は既定で `config/bbs3d_ros2.yaml` 内ではコメントアウトされています(=既定値で動く)。変更したい行の `#` を外して値を書き換えてください。
 

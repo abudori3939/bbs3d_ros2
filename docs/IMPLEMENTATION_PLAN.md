@@ -242,6 +242,7 @@ launch / rviz / config 設定のみの変更。TDD 対象外。
 - [x] **Mutex 設計**: 既存 `state_mutex_`(短時間 lock 用)とは別に `bbs3d_mutex_` を導入。上流 `gpu::BBS3D` が thread-safe でないため、`set_tar_points` / `localize` の並行実行をクライアント側で完全に排他する責務を負う。`target_cloud_callback` と `run_localization` は共に `lock_guard` で取得し、再構築中の localize は callback 完了まで block。SingleThreadedExecutor 下では callback 直列化で競合は構造的に発生しないが、将来 MultiThreaded 化された場合の防御として lock を残す。
 - [x] テスト: `test/test_target_source_mode.py`(topic モードで起動 → graph に sub が現れる / target 未受信状態の localize で `"target map not loaded"` reason / target publish 後にガードを抜けて別 reason に遷移)。専用 fixture `bbs3d_ros2_test_topic_mode.yaml` を分離し、PCD ファイル不要で CI で常に実行される。
 - [x] **PR #11 レビュー対応 follow-up**(2026-05-12): 初版で導入した `unique_lock(try_to_lock)` + `"target map reloading"` reason は、SingleThreadedExecutor + default callback group では到達不能であることが判明したため、`lock_guard` で待つ semantics に変更し reloading reason を削除。同時に topic モードの echo を downsample 後の点群に揃え(pcd 側と一致)、テスト fixture を分離して PCD 依存を撤去。
+- [x] **PR #11 follow-up: target_cloud QoS yaml 化**(2026-05-12): 実機検証で `pcl_ros` 等 REP-2003 非準拠 publisher(`volatile`+`reliable`、設定変更不可)と接続できない問題が判明。`target_cloud_qos_reliability` / `target_cloud_qos_durability` の 2 軸を yaml で切替可能化(`get_or` で optional 読込、文字列→`rclcpp::*Policy` enum 変換ヘルパ追加)。default は REP-2003 Maps 推奨(`reliable`+`transient_local`)を維持し既存ユーザ影響なし。TDD で進行(RED → GREEN)。テスト `test_target_qos_config.py` は `get_subscriptions_info_by_topic` で graph 上の sub QoS を assert。
 - DoD: 動作中に `ros2 topic pub` で地図を切替できる ✅。
 
 ---
