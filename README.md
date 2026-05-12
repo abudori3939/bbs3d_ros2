@@ -130,6 +130,30 @@ ros2 service call /bbs3d_ros2_node/localize std_srvs/srv/Trigger {}
 - `lidar_topic_name` / `imu_topic_name` を自分の sensor のトピック名に書き換える
 - 探索範囲(`min_rpy` / `max_rpy`)・解像度(`min_level_res`)・スコア閾値などをチューニング(本家 README 参照)
 
+### 地図ホットスワップ(topic モード)
+階層移動や広大地図の分割切替で、**ノード再起動なしに target を切り替えたい** 場合は `target_source_mode: "topic"` を使います。
+
+```yaml
+# config/bbs3d_ros2.yaml
+target_source_mode: "topic"
+target_cloud_topic_name: "/target_cloud"   # 任意の topic 名に変更可
+```
+
+`target_clouds` 行は不要(無視されます)。起動後はノードログに `topic mode: waiting for target on /target_cloud` が出てトリガ待ち状態となり、target topic に PointCloud2 が来るたびに voxelmap を再構築します。送信側 QoS の既定は [REP-2003 Maps 推奨](https://ros.org/reps/rep-2003.html) の `transient_local`+`reliable`(`ros2 bag play` の単発送信や latched publisher で OK)。
+
+`pcl_ros` 等の REP-2003 非準拠 publisher(`volatile`+`reliable` で送信、設定変更不可)と接続する場合は、subscriber 側 QoS を yaml で切替えます:
+
+```yaml
+target_cloud_qos_reliability: "best_effort"   # default: "reliable"
+target_cloud_qos_durability:  "volatile"      # default: "transient_local"
+```
+
+DDS の QoS マッチング規則(`pub.durability >= sub.durability`)で接続不可になっている場合は `ros2 topic info <target_cloud_topic_name> --verbose` で publisher 側 QoS を確認してください。
+
+- target 未受信状態で `~/localize` を叩くと `response.message == "target map not loaded"`
+- 再構築中(数秒)に `~/localize` を叩くと **再構築完了まで blocking で待たされた後** に通常 localize 結果が返る(クライアント側のタイムアウトは future の `wait_for` 等で制御してください)
+- 再構築完了後の localize は通常通り動作
+
 ## ROS 2 インタフェース
 
 > 下表の Topic / Service 名はすべて [`config/bbs3d_ros2.yaml`](config/bbs3d_ros2.yaml) で変更可能です。yaml キーと既定値は [`## 設定`](#設定-configbbs3d_ros2yaml) を参照。
@@ -140,6 +164,7 @@ ros2 service call /bbs3d_ros2_node/localize std_srvs/srv/Trigger {}
 | `~/localize`(完全修飾 `/bbs3d_ros2_node/localize`) | `std_msgs/msg/Bool` | `data: true` でグローバル位置推定をトリガ |
 | `<lidar_topic_name>`(サンプル `/livox/points`) | `sensor_msgs/msg/PointCloud2` | source 点群 |
 | `<imu_topic_name>`(サンプル `/livox/imu`) | `sensor_msgs/msg/Imu` | 重力方向アライメント用 |
+| `<target_cloud_topic_name>`(既定 `/target_cloud`、`target_source_mode: "topic"` 時のみ) | `sensor_msgs/msg/PointCloud2` | target 点群を topic で受け取り voxelmap を動的に再構築(地図ホットスワップ)。QoS は既定で REP-2003 Maps 推奨(`transient_local`+`reliable`)、yaml で変更可 |
 
 ### Publications
 | Topic | Type | 用途 |
@@ -153,7 +178,7 @@ ros2 service call /bbs3d_ros2_node/localize std_srvs/srv/Trigger {}
 ### Services
 | Service | Type | 用途 |
 |---|---|---|
-| `~/localize`(完全修飾 `/bbs3d_ros2_node/localize`) | `std_srvs/srv/Trigger` | グローバル位置推定をトリガ。失敗時は `response.message` に reason(`"point cloud not received"`、`"imu not received"`、`"localization timed out"`、`"score below threshold"`)を返す |
+| `~/localize`(完全修飾 `/bbs3d_ros2_node/localize`) | `std_srvs/srv/Trigger` | グローバル位置推定をトリガ。失敗時は `response.message` に reason(`"point cloud not received"`、`"imu not received"`、`"localization timed out"`、`"score below threshold"`、`"target map not loaded"`)を返す。topic モードで target 再構築中の呼出は再構築完了まで blocking で待つ |
 
 > Topic と Service は ROS 2 で別名前空間に属するため、同じ完全修飾名で共存できます。`ros2 topic pub` か `ros2 service call` かで型に応じた呼び出しになります。
 
@@ -180,6 +205,10 @@ ros2 service call /bbs3d_ros2_node/localize std_srvs/srv/Trigger {}
 | `score_topic_name` | best score publisher 名(既定 `/score`) |
 | `time_topic_name` | 実行時間 publisher 名(既定 `/time`) |
 | `localize_topic_name` | トリガ Bool topic + Trigger service の共通名(既定 `~/localize`) |
+| `target_source_mode` | target 点群の入手元(既定 `pcd`、または `topic` で動的受信) |
+| `target_cloud_topic_name` | topic モードで subscribe する target トピック名(既定 `/target_cloud`)|
+| `target_cloud_qos_reliability` | target sub の reliability(既定 `"reliable"`、または `"best_effort"`)|
+| `target_cloud_qos_durability` | target sub の durability(既定 `"transient_local"` = REP-2003 Maps 推奨、または `"volatile"` = `pcl_ros` 等と接続用)|
 
 > Topic / Service 名は既定で `config/bbs3d_ros2.yaml` 内ではコメントアウトされています(=既定値で動く)。変更したい行の `#` を外して値を書き換えてください。
 

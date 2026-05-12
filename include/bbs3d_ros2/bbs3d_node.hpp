@@ -45,12 +45,15 @@ private:
 
   bool load_config(const std::string & config);
   // PCD ロード + voxelmap 構築。失敗時は std::runtime_error を throw。
-  // Step 10 で target_source_mode == "pcd" の場合のみ呼ぶように 1 行 if で
-  // ラップする想定。本 PR では ctor から無条件に呼ぶ。
+  // Step 10 で `target_source_mode == "pcd"` の分岐配下からのみ呼ばれる。
   // **前提条件**: tar_points_pub_ が既に初期化されていること(本メソッド内で
-  // /tar_points に publish するため)。Step 10 で呼び出し位置を変えるときは
-  // この順序を守ること(publisher 作成 → 本メソッド呼び出し)。
+  // tar_points_topic_name に publish するため)。publisher 作成 → 本メソッド呼び出し
+  // の順序を守ること。
   void load_target_clouds_pcd();
+  // Step 10: topic モードで target 点群を受信するたびに呼ばれる。
+  // bbs3d_mutex_ を lock_guard で保持したまま voxelmap を再構築するため、
+  // 再構築中の localize は callback 完了まで blocking で待つ。
+  void target_cloud_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
   void broadcast_viewer_frame(const std::vector<Eigen::Vector3f> & points);
   LocalizeResult run_localization();
   void localize_topic_callback(const std_msgs::msg::Bool::SharedPtr msg);
@@ -78,6 +81,8 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr localize_srv_;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
+  // Step 10: target_source_mode == "topic" 時のみ作成。pcd モードでは nullptr のまま。
+  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr target_cloud_sub_;
 
   // pub
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr tar_points_pub_;
@@ -99,6 +104,16 @@ private:
   rclcpp::Time lidar_last_received_;
   rclcpp::Time imu_last_received_;
 
+  // Step 10: gpu_bbs3d への全アクセス(set_tar_points / localize / set_voxelmaps_coords
+  // 等)を直列化する。上流 BBS3D は thread-safe でないため、本ノード側でクライアント
+  // 排他制御を肩代わりする。target_cloud_callback と run_localization は共に lock_guard
+  // で取得し、再構築中の localize は callback 完了まで block(秒単位)。SingleThreadedExecutor
+  // 下では callback 直列化で競合は発生しないが、将来 MultiThreaded 化された場合の防御として
+  // lock を残す。tar_points_loaded_ も spin 開始後は同じ lock 配下で読み書き
+  // (ctor 初期化は spin 前で他 callback が動かないため lock 不要)。
+  mutable std::mutex bbs3d_mutex_;
+  bool tar_points_loaded_;
+
   gpu::BBS3D gpu_bbs3d;
 
   // Config
@@ -113,6 +128,15 @@ private:
   std::string score_topic_name;
   std::string time_topic_name;
   std::string localize_topic_name;
+  // Step 10: target 点群の入手元。"pcd" は起動時に target_clouds パスから PCD ロード、
+  // "topic" は target_cloud_topic_name を subscribe。
+  std::string target_source_mode;
+  std::string target_cloud_topic_name;
+  // Step 10 follow-up: target_cloud sub の QoS を yaml で切替可能(default は
+  // REP-2003 Maps 推奨の reliable + transient_local)。pcl_ros 等 REP-2003 非準拠
+  // publisher (volatile) と接続するために導入。
+  rclcpp::ReliabilityPolicy target_cloud_qos_reliability_;
+  rclcpp::DurabilityPolicy target_cloud_qos_durability_;
   double min_level_res;
   int max_level;
   Eigen::Vector3d min_rpy;

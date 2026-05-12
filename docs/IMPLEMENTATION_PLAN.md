@@ -227,20 +227,23 @@ launch / rviz / config 設定のみの変更。TDD 対象外。
   - 空文字 yaml 値の防御(PR #10 review): `tar_points_topic_name: ""` 等で `create_publisher("", ...)` が rclcpp 例外を吐く。`get_or` を空文字も default 扱いするか、`load_config` 全体で空文字を明示 RuntimeError にするか、設計判断が必要。`lidar_topic_name` / `imu_topic_name` 等既存項目も同じ問題を抱えるため、Step 9 単独で局所最適化せず、Step 10 完了後の cleanup PR で `load_config` 全体を強化する候補。
 - DoD: 全トピック名がデフォルト動作を変えずに yaml で変更可能 ✅。
 
-### Step 10 — target 点群の topic モード対応(地図ホットスワップ)  🟡 未着手
+### Step 10 — target 点群の topic モード対応(地図ホットスワップ)  ✅ 完了
 **TDD 適用**。
 
-- [ ] `config/bbs3d_ros2.yaml` に以下を追加:
+- [x] `config/bbs3d_ros2.yaml` に以下を追加(Optional セクションにコメントアウト形式で記載、外せば反映):
   - `target_source_mode: "pcd"` または `"topic"`(default `pcd`)
   - `target_cloud_topic_name`(default `/target_cloud`、topic モードのみ参照)
-- [ ] `pcd` モード:既存挙動(起動時に `target_clouds` パスから PCD ロード)。
-- [ ] `topic` モード:
-  - `transient_local` QoS で `target_cloud_topic_name` を sub。
-  - 受信のたびに `gpu_bbs3d.set_tar_points()` を呼び直して voxelmap を再構築(地図ホットスワップ)。
-  - 起動時はマップ未設定で待機し、未受信状態で `/click_loc` / `~/localize` が来たら明示的に「地図未設定」エラーを返す(Step 8 のエラーハンドリングと連携)。
-  - 再構築中は localize リクエストをブロック / 拒否する(競合防止)。実装方針(mutex か state machine か)は実装時に判断。
-- [ ] テスト: 各モードで地図が正しく設定されること、topic モードで再受信時に切替わること、未受信時にエラーが返ること。
-- DoD: 動作中に `ros2 topic pub` で地図を切替できる。
+- [x] `pcd` モード:既存挙動(起動時に `target_clouds` パスから PCD ロード)。回帰なし(smoke / bad_pcd_path / localize_service / topic_name_config 全 PASS で確認)。
+- [x] `topic` モード:
+  - `transient_local`+`reliable` QoS で `target_cloud_topic_name` を sub。
+  - 受信のたびに `pcl::VoxelGrid`(`tar_leaf_size > 0` 時)→ `gpu_bbs3d.set_tar_points()` + `set_trans_search_range()` で voxelmap を再構築(地図ホットスワップ)。echo は `tar_points_topic_name` に **downsample 後の点群** を `pcl::toROSMsg` で publish(pcd モードと同じ不変条件:`<tar_points_topic_name>` に流れる cloud = voxelmap に登録された cloud)。
+  - 起動時は `tar_points_loaded_ = false` で待機し、未受信状態で `~/localize` が来たら `response.message == "target map not loaded"` を返す。
+  - 再構築中の localize は `bbs3d_mutex_` を `lock_guard` で取得するため、callback 完了まで blocking で待つ(API は「localize 呼出は再構築完了まで待つ」というシンプルな約束)。
+- [x] **Mutex 設計**: 既存 `state_mutex_`(短時間 lock 用)とは別に `bbs3d_mutex_` を導入。上流 `gpu::BBS3D` が thread-safe でないため、`set_tar_points` / `localize` の並行実行をクライアント側で完全に排他する責務を負う。`target_cloud_callback` と `run_localization` は共に `lock_guard` で取得し、再構築中の localize は callback 完了まで block。SingleThreadedExecutor 下では callback 直列化で競合は構造的に発生しないが、将来 MultiThreaded 化された場合の防御として lock を残す。
+- [x] テスト: `test/test_target_source_mode.py`(topic モードで起動 → graph に sub が現れる / target 未受信状態の localize で `"target map not loaded"` reason / target publish 後にガードを抜けて別 reason に遷移)。専用 fixture `bbs3d_ros2_test_topic_mode.yaml` を分離し、PCD ファイル不要で CI で常に実行される。
+- [x] **PR #11 レビュー対応 follow-up**(2026-05-12): 初版で導入した `unique_lock(try_to_lock)` + `"target map reloading"` reason は、SingleThreadedExecutor + default callback group では到達不能であることが判明したため、`lock_guard` で待つ semantics に変更し reloading reason を削除。同時に topic モードの echo を downsample 後の点群に揃え(pcd 側と一致)、テスト fixture を分離して PCD 依存を撤去。
+- [x] **PR #11 follow-up: target_cloud QoS yaml 化**(2026-05-12): 実機検証で `pcl_ros` 等 REP-2003 非準拠 publisher(`volatile`+`reliable`、設定変更不可)と接続できない問題が判明。`target_cloud_qos_reliability` / `target_cloud_qos_durability` の 2 軸を yaml で切替可能化(`get_or` で optional 読込、文字列→`rclcpp::*Policy` enum 変換ヘルパ追加)。default は REP-2003 Maps 推奨(`reliable`+`transient_local`)を維持し既存ユーザ影響なし。TDD で進行(RED → GREEN)。テスト `test_target_qos_config.py` は `get_subscriptions_info_by_topic` で graph 上の sub QoS を assert。
+- DoD: 動作中に `ros2 topic pub` で地図を切替できる ✅。
 
 ---
 
