@@ -51,7 +51,8 @@ private:
   // の順序を守ること。
   void load_target_clouds_pcd();
   // Step 10: topic モードで target 点群を受信するたびに呼ばれる。
-  // bbs3d_mutex_ を保持したまま voxelmap を再構築するため、localize と並行しない。
+  // bbs3d_mutex_ を lock_guard で保持したまま voxelmap を再構築するため、
+  // 再構築中の localize は callback 完了まで blocking で待つ。
   void target_cloud_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
   void broadcast_viewer_frame(const std::vector<Eigen::Vector3f> & points);
   LocalizeResult run_localization();
@@ -105,9 +106,11 @@ private:
 
   // Step 10: gpu_bbs3d への全アクセス(set_tar_points / localize / set_voxelmaps_coords
   // 等)を直列化する。上流 BBS3D は thread-safe でないため、本ノード側でクライアント
-  // 排他制御を肩代わりする。target_cloud_callback は lock_guard、run_localization は
-  // unique_lock(try_to_lock)で取得し、busy なら "target map reloading" を返す。
-  // tar_points_loaded_ も同じ lock 配下で読み書き(地図未設定で localize を拒否するため)。
+  // 排他制御を肩代わりする。target_cloud_callback と run_localization は共に lock_guard
+  // で取得し、再構築中の localize は callback 完了まで block(秒単位)。SingleThreadedExecutor
+  // 下では callback 直列化で競合は発生しないが、将来 MultiThreaded 化された場合の防御として
+  // lock を残す。tar_points_loaded_ も spin 開始後は同じ lock 配下で読み書き
+  // (ctor 初期化は spin 前で他 callback が動かないため lock 不要)。
   mutable std::mutex bbs3d_mutex_;
   bool tar_points_loaded_;
 

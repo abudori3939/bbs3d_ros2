@@ -178,9 +178,9 @@ void Bbs3dNode::load_target_clouds_pcd()
   }
 }
 
-// Step 10: topic モードで target 点群を受信するたびに呼ばれる。bbs3d_mutex_ を保持
-// したまま voxelmap を再構築するため、再構築中の localize は try_lock 失敗で busy
-// reason を返す(run_localization 側)。callback はそのまま待つ(lock_guard)。
+// Step 10: topic モードで target 点群を受信するたびに呼ばれる。bbs3d_mutex_ を
+// lock_guard で保持したまま voxelmap を再構築するため、再構築中の localize は
+// callback 完了まで block で待つ(run_localization 側も同じ lock_guard を取る)。
 void Bbs3dNode::target_cloud_callback(
   const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 {
@@ -226,8 +226,13 @@ void Bbs3dNode::target_cloud_callback(
     "Target voxelmap rebuilt: %zu points in %ld ms",
     tar_points.size(), build_ms);
 
-  // tar_points_topic_name にも echo して RViz 表示用に流す。
-  tar_points_pub_->publish(*msg);
+  // tar_points_topic_name には voxelmap 構築に実際に使った点群(downsample 後)を
+  // echo する。pcd モードの load_target_clouds_pcd と同じ不変条件:
+  // 「<tar_points_topic_name> に流れる cloud = voxelmap に登録された cloud」。
+  sensor_msgs::msg::PointCloud2 echo_msg;
+  pcl::toROSMsg(*tar_cloud_ptr, echo_msg);
+  echo_msg.header = msg->header;  // frame_id / stamp は受信側を引き継ぐ
+  tar_points_pub_->publish(echo_msg);
   broadcast_viewer_frame(tar_points);
 }
 
@@ -340,13 +345,10 @@ void Bbs3dNode::broadcast_viewer_frame(const std::vector<Eigen::Vector3f> & poin
 Bbs3dNode::LocalizeResult Bbs3dNode::run_localization()
 {
   // Step 10: gpu_bbs3d への全アクセスを排他。target_cloud_callback が再構築中なら
-  // try_lock 失敗 → busy reason を返す(クライアントが retry 判断)。取得できた場合
-  // unique_lock は関数末尾まで保持され、gpu_bbs3d.localize() 実行中も lock 中
-  // (= set_tar_points と並行しない)。
-  std::unique_lock<std::mutex> bbs3d_lock(bbs3d_mutex_, std::try_to_lock);
-  if (!bbs3d_lock.owns_lock()) {
-    return {false, "target map reloading"};
-  }
+  // lock_guard で再構築完了まで block で待つ(API は「localize 呼出は再構築完了まで
+  // 待つ」というシンプルな約束に統一)。取得後は関数末尾まで保持され、gpu_bbs3d.localize()
+  // 実行中も lock 中(= set_tar_points と並行しない)。
+  std::lock_guard<std::mutex> bbs3d_lock(bbs3d_mutex_);
   if (!tar_points_loaded_) {
     return {false, "target map not loaded"};
   }
