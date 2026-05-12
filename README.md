@@ -1,5 +1,5 @@
 # bbs3d_ros2
-ここにgifアニメ（step6以降で反映）
+https://github.com/user-attachments/assets/fc4b50d1-b303-477b-a6aa-9d409b80988f
 
 このROS 2ノードは、[KOKIAOKI/3d_bbs](https://github.com/KOKIAOKI/3d_bbs) の Global Localization を、他のROS 2ノードと同じように `colcon build` できるように整理したラッパーノードです。
 本家のテストプログラムの `ros2_test/rviz2` の移植＋ターゲット点群のトピック入力に対応します。
