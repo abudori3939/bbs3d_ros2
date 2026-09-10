@@ -25,7 +25,7 @@
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 
-#include <gpu_bbs3d/bbs3d.cuh>
+#include "bbs3d_ros2/bbs3d_backend.hpp"
 
 namespace bbs3d_ros2
 {
@@ -54,7 +54,7 @@ private:
   // bbs3d_mutex_ を lock_guard で保持したまま voxelmap を再構築するため、
   // 再構築中の localize は callback 完了まで blocking で待つ。
   void target_cloud_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
-  void broadcast_viewer_frame(const std::vector<Eigen::Vector3f> & points);
+  void broadcast_viewer_frame(const std::vector<Eigen::Vector3d> & points);
   LocalizeResult run_localization();
   void localize_topic_callback(const std_msgs::msg::Bool::SharedPtr msg);
   void localize_srv_callback(
@@ -104,17 +104,19 @@ private:
   rclcpp::Time lidar_last_received_;
   rclcpp::Time imu_last_received_;
 
-  // Step 10: gpu_bbs3d への全アクセス(set_tar_points / localize / set_voxelmaps_coords
-  // 等)を直列化する。上流 BBS3D は thread-safe でないため、本ノード側でクライアント
-  // 排他制御を肩代わりする。target_cloud_callback と run_localization は共に lock_guard
-  // で取得し、再構築中の localize は callback 完了まで block(秒単位)。SingleThreadedExecutor
-  // 下では callback 直列化で競合は発生しないが、将来 MultiThreaded 化された場合の防御として
-  // lock を残す。tar_points_loaded_ も spin 開始後は同じ lock 配下で読み書き
-  // (ctor 初期化は spin 前で他 callback が動かないため lock 不要)。
+  // Step 10: BBS3D バックエンド (bbs3d_) への全アクセス(set_tar_points /
+  // localize / set_voxelmaps_coords 等)を直列化する。上流 BBS3D は thread-safe
+  // でないため、本ノード側でクライアント排他制御を肩代わりする。
+  // target_cloud_callback と run_localization は共に lock_guard で取得し、
+  // 再構築中の localize は callback 完了まで block(秒単位)。
+  // SingleThreadedExecutor 下では callback 直列化で競合は発生しないが、将来
+  // MultiThreaded 化された場合の防御として lock を残す。tar_points_loaded_ も
+  // spin 開始後は同じ lock 配下で読み書き(ctor 初期化は spin 前で他 callback が
+  // 動かないため lock 不要)。
   mutable std::mutex bbs3d_mutex_;
   bool tar_points_loaded_;
 
-  gpu::BBS3D gpu_bbs3d;
+  std::unique_ptr<BbsBackend> bbs3d_;
 
   // Config
   std::string tar_path;
@@ -128,6 +130,9 @@ private:
   std::string score_topic_name;
   std::string time_topic_name;
   std::string localize_topic_name;
+  // Step 11: 使用する BBS3D 実装。"auto" は GPU 実装を含むビルドなら GPU、
+  // CPU のみのビルドなら CPU。
+  BackendKind backend_kind;
   // Step 10: target 点群の入手元。"pcd" は起動時に target_clouds パスから PCD ロード、
   // "topic" は target_cloud_topic_name を subscribe。
   std::string target_source_mode;

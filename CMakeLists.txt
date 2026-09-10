@@ -19,27 +19,65 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_LIST_DIR}/cmake")
 find_package(ament_cmake_auto REQUIRED)
 ament_auto_find_build_dependencies()
 
-find_package(CUDA REQUIRED)
-find_package(gpu_bbs3d REQUIRED)
+# cpu_bbs3d is always built and installed by upstream 3d_bbs (regardless of its
+# BUILD_CUDA option), so the CPU backend is a hard requirement.
+find_package(cpu_bbs3d REQUIRED)
 find_package(PCL REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(yaml-cpp REQUIRED)
+# cpu_bbs3d parallelizes its score evaluation with OpenMP.
+find_package(OpenMP)
 
-ament_auto_add_executable(bbs3d_ros2_node
+# Step 11: the GPU backend is compiled in only when both CUDA and
+# libgpu_bbs3d.so are present, so the package still builds on machines without
+# a GPU. Override the auto-detection with -DBBS3D_ENABLE_GPU=ON/OFF.
+find_package(CUDA QUIET)
+find_package(gpu_bbs3d QUIET)
+if(NOT DEFINED BBS3D_ENABLE_GPU)
+  if(CUDA_FOUND AND gpu_bbs3d_FOUND)
+    set(BBS3D_ENABLE_GPU ON)
+  else()
+    set(BBS3D_ENABLE_GPU OFF)
+  endif()
+endif()
+message(STATUS "bbs3d_ros2: GPU backend = ${BBS3D_ENABLE_GPU}")
+
+set(BBS3D_ROS2_SOURCES
   src/bbs3d_node_main.cpp
   src/bbs3d_node.cpp
+  src/bbs3d_backend.cpp
+  src/bbs3d_backend_cpu.cpp
+)
+if(BBS3D_ENABLE_GPU)
+  find_package(CUDA REQUIRED)
+  find_package(gpu_bbs3d REQUIRED)
+  list(APPEND BBS3D_ROS2_SOURCES src/bbs3d_backend_gpu.cpp)
+endif()
+
+ament_auto_add_executable(bbs3d_ros2_node
+  ${BBS3D_ROS2_SOURCES}
 )
 target_include_directories(bbs3d_ros2_node PUBLIC
   ${PROJECT_SOURCE_DIR}/include
-  ${gpu_bbs3d_INCLUDE_DIRS}
+  ${cpu_bbs3d_INCLUDE_DIRS}
   ${EIGEN3_INCLUDE_DIR}
-  ${CUDA_INCLUDE_DIRS}
 )
 target_link_libraries(bbs3d_ros2_node
-  ${gpu_bbs3d_LIBRARY}
+  ${cpu_bbs3d_LIBRARY}
   ${PCL_LIBRARIES}
   yaml-cpp
 )
+if(OpenMP_CXX_FOUND)
+  target_link_libraries(bbs3d_ros2_node OpenMP::OpenMP_CXX)
+endif()
+if(BBS3D_ENABLE_GPU)
+  target_compile_definitions(bbs3d_ros2_node PRIVATE BBS3D_HAS_GPU)
+  target_include_directories(bbs3d_ros2_node PUBLIC
+    ${gpu_bbs3d_INCLUDE_DIRS}
+    ${CUDA_INCLUDE_DIRS}
+  )
+  target_link_libraries(bbs3d_ros2_node ${gpu_bbs3d_LIBRARY})
+endif()
 
 if(BUILD_TESTING)
   # Lint only our own source. Default ament_lint_auto would scan the whole tree
@@ -87,6 +125,8 @@ if(BUILD_TESTING)
   add_launch_test(test/test_topic_name_config.py TIMEOUT 60)
   add_launch_test(test/test_target_source_mode.py TIMEOUT 90)
   add_launch_test(test/test_target_qos_config.py TIMEOUT 30)
+  add_launch_test(test/test_backend_config.py TIMEOUT 30)
+  add_launch_test(test/test_backend_invalid_value.py TIMEOUT 30)
 endif()
 
 ament_auto_package(

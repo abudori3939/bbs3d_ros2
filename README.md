@@ -15,9 +15,18 @@ https://github.com/user-attachments/assets/fc4b50d1-b303-477b-a6aa-9d409b80988f
 ## 対応環境
 - Ubuntu 22.04
 - ROS 2 humble
-- CUDA 12.0+
 - Eigen 3.4+(submodule 経由で取得)
-- NVIDIA GPU(3D-BBS の voxelmap 構築・探索に必要)
+- NVIDIA GPU + CUDA 12.0+ — **任意**。GPU がある環境では GPU 実装を、無い環境では CPU 実装を使います
+
+本家 3D-BBS は GPU 実装 (`gpu_bbs3d`) と CPU 実装 (`cpu_bbs3d`) の両方を提供しています。
+本パッケージはビルド時に CUDA と `libgpu_bbs3d.so` の有無を自動判定し、見つかれば GPU 実装込みで、
+見つからなければ CPU 実装のみでビルドします。**使い方(コマンド・launch・yaml)は同じです**。
+実行時にどちらを使うかは yaml の `backend`(既定 `"auto"`)で切り替えられ、起動ログに
+`3D-BBS backend: GPU` / `3D-BBS backend: CPU` として出ます。
+
+> [!NOTE]
+> CPU 実装は GPU 実装より大幅に遅く、点群サイズや探索範囲によっては 1 回の推定に数秒〜数十秒かかります。
+> `src_leaf_size` を大きくする / `max_scan_range` を絞る / `timeout_msec` を設定する、などで調整してください。
 
 ## インストール
 ### 1. このリポジトリを `--recursive` で clone
@@ -45,6 +54,17 @@ mkdir -p build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j
 sudo make install
+sudo ldconfig   # /usr/local/lib のライブラリを ld キャッシュに登録
+```
+
+**GPU / CUDA が無いマシンでは `-DBUILD_CUDA=OFF` を付けます**(本家の CMake は既定で CUDA を必須とするため、
+付けないと configure が失敗します)。CPU 実装 `libcpu_bbs3d.so` はこのオプションに関係なくインストールされます。
+
+```bash
+cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_CUDA=OFF
+make -j
+sudo make install
+sudo ldconfig
 ```
 
 > **重要:** `git submodule update` で `3d_bbs/` を更新したときは、**必ずこのステップを再実行**してください。古いライブラリと新しいヘッダの不整合で実行時エラーになることがあります。
@@ -76,6 +96,15 @@ source install/setup.bash
 ```
 
 > ビルドタイプは `CMakeLists.txt` で Release をデフォルトにしています。デバッグ目的で切り替えたい場合は `--cmake-args -DCMAKE_BUILD_TYPE=Debug`(または `RelWithDebInfo`)を付けてください。
+
+GPU 実装を含めたかどうかは configure ログに出ます:
+
+```
+-- bbs3d_ros2: GPU backend = ON    # CUDA と libgpu_bbs3d.so が見つかった
+-- bbs3d_ros2: GPU backend = OFF   # 見つからないので CPU 実装のみ
+```
+
+自動判定を上書きしたい場合は `--cmake-args -DBBS3D_ENABLE_GPU=OFF`(GPU 機で CPU のみビルド)/ `=ON` を指定します。
 
 ## 動作デモ
 
@@ -154,6 +183,52 @@ DDS の QoS マッチング規則(`pub.durability >= sub.durability`)で接続�
 - 再構築中(数秒)に `~/localize` を叩くと **再構築完了まで blocking で待たされた後** に通常 localize 結果が返る(クライアント側のタイムアウトは future の `wait_for` 等で制御してください)
 - 再構築完了後の localize は通常通り動作
 
+### CPU / GPU の切り替え
+GPU の無いマシンでも**同じ手順のまま**使えます(コマンド・launch・yaml は共通)。どちらの実装で動いているかは起動ログで確認できます:
+
+```
+[INFO] [bbs3d_ros2_node]: 3D-BBS backend: CPU
+```
+
+実装の選択は 2 段階です(どちらもユーザが意識せず既定のままで動きます)。
+
+**1. ビルド時**(どの実装をコンパイルするか) — CMake が自動判定します。CUDA と `/usr/local/lib/libgpu_bbs3d.so` が両方見つかれば GPU 実装込み、見つからなければ CPU 実装のみになります。判定結果は `colcon build` のログに出ます:
+
+```
+-- bbs3d_ros2: GPU backend = ON    # GPU + CPU 両方コンパイル
+-- bbs3d_ros2: GPU backend = OFF   # CPU のみ
+```
+
+GPU 機であえて CPU のみビルドしたい場合は `colcon build --packages-select bbs3d_ros2 --cmake-args -DBBS3D_ENABLE_GPU=OFF` を使います。
+
+**2. 実行時**(どちらを使うか) — yaml の `backend` で指定します。既定は `"auto"` で、**上の「1. ビルド時」の判定結果**に従います(GPU 込みでビルドされていれば GPU、CPU のみのビルドなら CPU)。既存の yaml をそのまま使う場合は何も追記する必要はありません。
+
+```yaml
+# config/bbs3d_ros2.yaml
+backend: "auto"   # "auto"(既定) | "gpu" | "cpu"
+```
+
+| 値 | 挙動 |
+|---|---|
+| `"auto"` | GPU 実装を含むビルドなら GPU、CPU のみのビルドなら CPU |
+| `"gpu"` | 常に GPU。CPU のみのビルドでは起動時に ERROR を出して exit 1 |
+| `"cpu"` | 常に CPU(GPU 機で CPU の速度・精度を比較したいときなど)|
+
+不正な値を書いた場合は起動時に `backend must be 'auto', 'gpu' or 'cpu', got '...'` を出して終了します(黙って別の実装で動くことはありません)。
+
+> [!NOTE]
+> `"auto"` の判定は **ビルド時**に決まります。GPU 機でビルドしたバイナリを GPU の見えない環境(`--gpus` 無しのコンテナ、ドライバ不整合など)で動かすと GPU 実装のまま起動して CUDA 側で失敗します。その場合は `backend: "cpu"` を明示するか、その環境でビルドし直してください。
+
+CPU 実装は GPU 実装より大幅に遅いため、実用速度が必要なら以下を調整してください:
+
+- `src_leaf_size` を大きくして source 点群を減らす(探索コストは点数にほぼ比例)
+- `max_scan_range` を絞る
+- `min_level_res` を大きくして最下層の voxel 解像度を粗くする(精度と引き換え)
+- `timeout_msec` を設定して、時間内に見つからなければ失敗として返す
+
+> [!WARNING]
+> `max_level` を **小さく** すると探索開始階層が細かくなり、初期変換集合が増えて **逆に遅くなります**。高速化目的で下げないでください。
+
 ## ROS 2 インタフェース
 
 > 下表の Topic / Service 名はすべて [`config/bbs3d_ros2.yaml`](config/bbs3d_ros2.yaml) で変更可能です。yaml キーと既定値は [`## 設定`](#設定-configbbs3d_ros2yaml) を参照。
@@ -187,6 +262,9 @@ DDS の QoS マッチング規則(`pub.durability >= sub.durability`)で接続�
 
 ## 設定 (`config/bbs3d_ros2.yaml`)
 
+> [!IMPORTANT]
+> `tar_leaf_size` で target 点群を間引く際のフィルタは、**pcd モードは `pcl::ApproximateVoxelGrid`(上流 `load_tar_clouds`)、topic モードは `pcl::VoxelGrid`** と異なります。上流作者は [3d_bbs#38](https://github.com/KOKIAOKI/3d_bbs/issues/38) で「target 点群への ApproximateVoxelGrid は 3D-BBS の位置推定に悪影響がある。自前の点群では `voxel_grid` 等を使うこと」と報告しています。**自前地図を pcd モードで使う場合は `tar_leaf_size: 0.0`(間引き無効)にして、事前に `voxel_grid` で間引いた PCD を配置**してください。
+
 スキーマは上流 [`3d_bbs/ros2_test/config/ros2_test.yaml`](3d_bbs/ros2_test/config/ros2_test.yaml) と同じです。主な項目:
 
 | キー | 説明 |
@@ -199,6 +277,7 @@ DDS の QoS マッチング規則(`pub.durability >= sub.durability`)で接続�
 | `tar_leaf_size` / `src_leaf_size` | ダウンサンプル(0.0 で off) |
 | `min_scan_range` / `max_scan_range` | source 点群のクロップ [m] |
 | `timeout_msec` | 探索タイムアウト(0 で off) |
+| `backend` | 使用する 3D-BBS 実装(既定 `"auto"`、`"gpu"` / `"cpu"` で固定)|
 | `tar_points_topic_name` | target 点群 publisher 名(既定 `/tar_points`) |
 | `src_points_on_global_pose_topic_name` | source 点群 publisher 名(既定 `/src_points_on_global_pose`) |
 | `global_pose_topic_name` | 推定 pose publisher 名(既定 `/global_pose`) |
@@ -217,7 +296,13 @@ DDS の QoS マッチング規則(`pub.durability >= sub.durability`)で接続�
 | 症状 | 原因 / 対処 |
 |---|---|
 | `[ERROR] Can not open folder` の直後に segfault | `target_clouds` がプレースホルダ(`/path/to/target`)のまま、または存在しないパス。**絶対パス**を指定すること。フェーズ B(Step 8)で graceful error に改善予定 |
-| ビルドが `find_package(gpu_bbs3d) failed` で失敗 | Step 2(本家 `sudo make install`)が未実行。`/usr/local/lib/libgpu_bbs3d.so` を確認 |
+| ビルドが `find_package(cpu_bbs3d) failed` で失敗 | Step 2(本家 `sudo make install`)が未実行。`/usr/local/lib/libcpu_bbs3d.so` を確認 |
+| 起動時に `error while loading shared libraries: libcpu_bbs3d.so` | `sudo ldconfig` が未実行(`/usr/local/lib` が ld キャッシュに入っていない)|
+| GPU 機なのに `GPU backend = OFF` になる | 本家を `-DBUILD_CUDA=OFF` でビルドした、または CUDA が見つからない。`/usr/local/lib/libgpu_bbs3d.so` と `nvcc` を確認 |
+| 起動時に `backend: 'gpu' was requested but this build has no GPU support` | CPU のみでビルドしたパッケージに `backend: "gpu"` を指定している。`"auto"` / `"cpu"` にするか、GPU 環境でビルドし直す |
+| topic モードで `Received target cloud is empty after downsample` が出る | `tar_leaf_size` が小さすぎて `pcl::VoxelGrid` のボクセル数が int32 を溢れ、空の点群が返っている(PCL の仕様)。地図の外形が大きいほど溢れやすい(例: 404 x 430 x 70 m の地図では 0.1 で溢れ、0.5 なら OK)。`tar_leaf_size` を大きくすること |
+| 自前地図で推定精度が出ない(pcd モード)| pcd モードは上流 `pciof::load_tar_clouds` 経由で `pcl::ApproximateVoxelGrid` を使うが、作者が [3d_bbs#38](https://github.com/KOKIAOKI/3d_bbs/issues/38) で「target 点群への ApproximateVoxelGrid は位置推定に悪影響」と報告している(配布テストデータは downsample 済みのため影響なし)。自前地図では `tar_leaf_size: 0.0` にして**事前に `voxel_grid` で間引いた PCD** を置くか、`pcl::VoxelGrid` を使う topic モードを選ぶ |
+| CPU で 1 回の推定が非常に遅い | CPU 実装は GPU の数十倍遅い。`src_leaf_size` を大きくする / `max_scan_range` を絞る / `timeout_msec` を設定する |
 | `submodule update` 後に動作不安定 | 上流ヘッダだけ新しくなりライブラリが古いまま。Step 2 を再実行 |
 | `~/localize` を pub / call しても何も起きない | rosbag 再生中(`/livox/points` `/livox/imu` が流れている)か確認。Service なら `response.message` に `"point cloud not received"` / `"imu not received"` 等が乗る。Topic 経由のときはノードログに同じメッセージが出るので、トピック名やセンサデータの流れを確認 |
 

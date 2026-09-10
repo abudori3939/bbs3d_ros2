@@ -43,6 +43,15 @@ max_scan_range: 100.0 # [m]
 # Enter the number as int
 timeout_msec: 0 # off: 0
 
+## 使用する 3D-BBS 実装 (Step 11)
+## "auto" : GPU 実装を含むビルドなら GPU、CPU のみのビルドなら CPU(default)
+## "gpu"  : 常に GPU。GPU 実装を含まないビルドでは起動時にエラー終了する
+## "cpu"  : 常に CPU(GPU 搭載機で CPU と比較したいときなど)
+## GPU 実装が含まれるかはビルド時に自動判定される(CUDA と libgpu_bbs3d.so が
+## 見つかるか)。CPU は GPU より大幅に遅いため、必要なら timeout_msec や
+## src_leaf_size と併せて調整すること。
+# backend: "auto"
+
 ## Topic / Service names (defaults match upstream ros2_test/rviz2)
 ## Uncomment and edit to override. Defaults are used when commented out.
 # tar_points_topic_name: "/tar_points"
