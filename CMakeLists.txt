@@ -127,6 +127,8 @@ if(BUILD_TESTING)
   add_launch_test(test/test_target_qos_config.py TIMEOUT 30)
   add_launch_test(test/test_backend_config.py TIMEOUT 30)
   add_launch_test(test/test_backend_invalid_value.py TIMEOUT 30)
+  add_launch_test(test/test_target_cloud_nan.py TIMEOUT 60)
+  add_launch_test(test/test_target_cloud_leaf_warning.py TIMEOUT 60)
 endif()
 
 ament_auto_package(

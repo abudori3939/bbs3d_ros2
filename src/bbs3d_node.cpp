@@ -2,8 +2,12 @@
 #include "bbs3d_ros2/bbs3d_node.hpp"
 
 #include <math.h>
+#include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -14,6 +18,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include <pcl/common/distances.h>
+#include <pcl/common/point_tests.h>
 #include <pcl/common/transforms.h>
 #include <pcl/filters/approximate_voxel_grid.h>
 #include <pcl/filters/voxel_grid.h>
@@ -64,6 +69,101 @@ std::optional<BackendKind> parse_backend(const std::string & s)
   if (s == "gpu") {return BackendKind::Gpu;}
   if (s == "cpu") {return BackendKind::Cpu;}
   return std::nullopt;
+}
+
+// Step 12: 受信 target 点群の前処理ヘルパ。
+struct CloudStats
+{
+  size_t dropped;      // 落とした非有限点の数
+  Eigen::Array3f min_p;  // 有限点のみの bbox
+  Eigen::Array3f max_p;
+};
+
+// 非有限点 (NaN/Inf) を落としつつ bbox を 1 パスで求める。
+// pcl::VoxelGrid が非有限点を除くのは is_dense == false のときだけで、
+// tar_leaf_size == 0.0 や leaf size 過小(PCL が downsample を素通しする)の
+// 場合は NaN がそのまま voxelmap と viewer TF の centroid に入ってしまうため、
+// フィルタの前段でノード側が必ず落とす。
+CloudStats sanitize_cloud(pcl::PointCloud<pcl::PointXYZ> & cloud)
+{
+  CloudStats stats;
+  stats.min_p = Eigen::Array3f::Constant(std::numeric_limits<float>::max());
+  stats.max_p = Eigen::Array3f::Constant(std::numeric_limits<float>::lowest());
+
+  const size_t before = cloud.size();
+  auto last = std::remove_if(
+    cloud.points.begin(), cloud.points.end(),
+    [](const pcl::PointXYZ & p) {return !pcl::isFinite(p);});
+  cloud.points.erase(last, cloud.points.end());
+  cloud.width = cloud.points.size();
+  cloud.height = 1;
+  cloud.is_dense = true;
+  stats.dropped = before - cloud.points.size();
+
+  for (const auto & p : cloud.points) {
+    const Eigen::Array3f v(p.x, p.y, p.z);
+    stats.min_p = stats.min_p.min(v);
+    stats.max_p = stats.max_p.max(v);
+  }
+  return stats;
+}
+
+// pcl::VoxelGrid と同じ式でボクセル数が int32 を超えないか先回り判定する。
+// 超える場合、PCL は PCL_WARN を出して入力を素通しする(downsample されない)
+// ため、収まる最小の leaf size を返して呼び出し側で警告できるようにする。
+// 収まる場合は nullopt。
+std::optional<float> min_feasible_leaf_size(
+  const Eigen::Array3f & min_p, const Eigen::Array3f & max_p, const float leaf)
+{
+  const Eigen::Array3f extent = max_p - min_p;
+  constexpr int64_t kMaxCells = std::numeric_limits<int32_t>::max();
+
+  // PCL と同じ算術で判定する: dx = (int64)(extent * (1/leaf)) + 1 の 3 軸積。
+  // 除算 (extent / leaf) では丸めが PCL の float 乗算とわずかにずれ、閾値の
+  // 近傍で「ノードは無警告なのに PCL は素通しする」取りこぼしが起きるため、
+  // inverse_leaf_size を float で作って乗算する形に揃える。
+  // 極端に小さい leaf では積が int64 を溢れる(符号付き overflow = UB)ので、
+  // 上限超過が確定した時点で打ち切る。
+  const auto exceeds_limit = [&extent](const float l) {
+      const float inv = 1.0f / l;
+      int64_t product = 1;
+      for (int i = 0; i < 3; ++i) {
+        const float d_f = extent[i] * inv;
+        if (!(d_f < static_cast<float>(kMaxCells))) {
+          return true;  // int64 への cast 前に溢れ / 非有限を弾く
+        }
+        const int64_t d = static_cast<int64_t>(d_f) + 1;
+        if (d > kMaxCells / product) {
+          return true;
+        }
+        product *= d;
+      }
+      return product > kMaxCells;
+    };
+
+  if (!exceeds_limit(leaf)) {
+    return std::nullopt;
+  }
+
+  // 初期値は「非退化軸のみ」で見積もる。平面地図(z の extent が 0)などで
+  // 3 乗根を使うと 0 に潰れ、leaf からの 1.1 倍刻みでは収束しきらずに
+  // 「設定しても直らない値」を勧めてしまうため。
+  double product = 1.0;
+  int dims = 0;
+  for (int i = 0; i < 3; ++i) {
+    if (extent[i] > 0.0f) {
+      product *= static_cast<double>(extent[i]);
+      ++dims;
+    }
+  }
+  double suggestion = (dims > 0)
+    ? std::pow(product / static_cast<double>(kMaxCells), 1.0 / dims)
+    : static_cast<double>(leaf);
+  suggestion = std::max(suggestion, static_cast<double>(leaf));
+  for (int i = 0; i < 256 && exceeds_limit(static_cast<float>(suggestion)); ++i) {
+    suggestion *= 1.1;
+  }
+  return static_cast<float>(suggestion);
 }
 
 Eigen::Vector3d to_eigen(const std::vector<double> & vec)
@@ -260,8 +360,38 @@ void Bbs3dNode::target_cloud_callback(
     new pcl::PointCloud<pcl::PointXYZ>());
   pcl::fromROSMsg(*msg, *tar_cloud_ptr);
 
+  // Step 12: 非有限点を落としてから downsample する(残すと voxelmap と
+  // viewer TF の centroid が NaN になる)。bbox はここで一緒に求める。
+  const CloudStats stats = sanitize_cloud(*tar_cloud_ptr);
+  if (stats.dropped > 0) {
+    RCLCPP_WARN(
+      get_logger(),
+      "Dropped %zu non-finite points from the received target cloud",
+      stats.dropped);
+  }
+  if (tar_cloud_ptr->empty()) {
+    RCLCPP_WARN(
+      get_logger(),
+      "Received target cloud has no finite points, ignoring");
+    return;
+  }
+
   // pcd モードと同じ前処理: tar_leaf_size > 0 なら voxel filter で downsample。
   if (tar_leaf_size > 0.0f) {
+    // Step 12: leaf size が小さすぎると pcl::VoxelGrid はボクセル数が int32 を
+    // 超える旨を PCL_WARN(stderr 直書き)に出して **入力を素通しする**。
+    // 黙って全点が voxelmap に入るのを避けるため、ノード側でも診断を出す。
+    const auto suggestion =
+      min_feasible_leaf_size(stats.min_p, stats.max_p, tar_leaf_size);
+    if (suggestion) {
+      const Eigen::Array3f extent = stats.max_p - stats.min_p;
+      RCLCPP_WARN(
+        get_logger(),
+        "tar_leaf_size %g is too small for this map (%.0f x %.0f x %.0f m): "
+        "PCL skips the downsample and the full cloud is used. "
+        "Use %g or larger.",
+        tar_leaf_size, extent[0], extent[1], extent[2], *suggestion);
+    }
     pcl::PointCloud<pcl::PointXYZ>::Ptr filtered(
       new pcl::PointCloud<pcl::PointXYZ>());
     pcl::VoxelGrid<pcl::PointXYZ> voxel;
