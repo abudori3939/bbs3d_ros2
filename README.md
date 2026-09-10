@@ -300,7 +300,8 @@ CPU 実装は GPU 実装より大幅に遅いため、実用速度が必要な�
 | 起動時に `error while loading shared libraries: libcpu_bbs3d.so` | `sudo ldconfig` が未実行(`/usr/local/lib` が ld キャッシュに入っていない)|
 | GPU 機なのに `GPU backend = OFF` になる | 本家を `-DBUILD_CUDA=OFF` でビルドした、または CUDA が見つからない。`/usr/local/lib/libgpu_bbs3d.so` と `nvcc` を確認 |
 | 起動時に `backend: 'gpu' was requested but this build has no GPU support` | CPU のみでビルドしたパッケージに `backend: "gpu"` を指定している。`"auto"` / `"cpu"` にするか、GPU 環境でビルドし直す |
-| topic モードで `Received target cloud is empty after downsample` が出る | `tar_leaf_size` が小さすぎて `pcl::VoxelGrid` のボクセル数が int32 を溢れ、空の点群が返っている(PCL の仕様)。地図の外形が大きいほど溢れやすい(例: 404 x 430 x 70 m の地図では 0.1 で溢れ、0.5 なら OK)。`tar_leaf_size` を大きくすること |
+| topic モードで `tar_leaf_size ... is too small for this map` の WARN が出る | `tar_leaf_size` が小さすぎて `pcl::VoxelGrid` のボクセル数が int32 を超えている。このとき PCL は**間引きをスキップして全点をそのまま通す**(空にはならない)ため、意図せず巨大な voxelmap が作られる。WARN が示す値以上に `tar_leaf_size` を上げること。実測(9,238,897 点 / 404 x 430 x 70 m の地図): `0.1` → 間引かれず 9,238,897 点・構築 4.4 s、`0.5` → 982,869 点・構築 1.7 s |
+| topic モードで `Dropped N non-finite points` が出る | 受信した target 点群に NaN/Inf が含まれていた。ノードが自動で除去するので対処は不要(送信側の点群を見直す手がかりとして出している)|
 | 自前地図で推定精度が出ない(pcd モード)| pcd モードは上流 `pciof::load_tar_clouds` 経由で `pcl::ApproximateVoxelGrid` を使うが、作者が [3d_bbs#38](https://github.com/KOKIAOKI/3d_bbs/issues/38) で「target 点群への ApproximateVoxelGrid は位置推定に悪影響」と報告している(配布テストデータは downsample 済みのため影響なし)。自前地図では `tar_leaf_size: 0.0` にして**事前に `voxel_grid` で間引いた PCD** を置くか、`pcl::VoxelGrid` を使う topic モードを選ぶ |
 | CPU で 1 回の推定が非常に遅い | CPU 実装は GPU の数十倍遅い。`src_leaf_size` を大きくする / `max_scan_range` を絞る / `timeout_msec` を設定する |
 | `submodule update` 後に動作不安定 | 上流ヘッダだけ新しくなりライブラリが古いまま。Step 2 を再実行 |

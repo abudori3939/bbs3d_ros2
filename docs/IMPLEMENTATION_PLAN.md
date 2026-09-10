@@ -249,7 +249,7 @@ launch / rviz / config 設定のみの変更。TDD 対象外。
 - [x] テスト: `test/test_target_source_mode.py`(topic モードで起動 → graph に sub が現れる / target 未受信状態の localize で `"target map not loaded"` reason / target publish 後にガードを抜けて別 reason に遷移)。専用 fixture `bbs3d_ros2_test_topic_mode.yaml` を分離し、PCD ファイル不要で CI で常に実行される。
 - [x] **PR #11 レビュー対応 follow-up**(2026-05-12): 初版で導入した `unique_lock(try_to_lock)` + `"target map reloading"` reason は、SingleThreadedExecutor + default callback group では到達不能であることが判明したため、`lock_guard` で待つ semantics に変更し reloading reason を削除。同時に topic モードの echo を downsample 後の点群に揃え(pcd 側と一致)、テスト fixture を分離して PCD 依存を撤去。
 - [x] **PR #11 follow-up: target_cloud QoS yaml 化**(2026-05-12): 実機検証で `pcl_ros` 等 REP-2003 非準拠 publisher(`volatile`+`reliable`、設定変更不可)と接続できない問題が判明。`target_cloud_qos_reliability` / `target_cloud_qos_durability` の 2 軸を yaml で切替可能化(`get_or` で optional 読込、文字列→`rclcpp::*Policy` enum 変換ヘルパ追加)。default は REP-2003 Maps 推奨(`reliable`+`transient_local`)を維持し既存ユーザ影響なし。TDD で進行(RED → GREEN)。テスト `test_target_qos_config.py` は `get_subscriptions_info_by_topic` で graph 上の sub QoS を assert。
-- [ ] **未対応(将来 follow-up、2026-09-10 の実機検証で判明)**: topic モードの `pcl::VoxelGrid` は広域地図 + 小さい leaf でボクセル数が int32 を溢れ、**空の点群を返す**(PCL の仕様)。例: 404 x 430 x 70 m の地図に `tar_leaf_size: 0.1` → cells ≈ 1.2e10 で溢れ、`Received target cloud is empty after downsample, ignoring` になる(0.5 なら 9.8e7 で OK)。現状 WARN は出るので追跡はできるが、「leaf size が小さすぎる」ことを示すメッセージにすると親切。
+- [x] **Step 12 で対応済み**(2026-09-10 の実機検証で判明): topic モードの `pcl::VoxelGrid` は広域地図 + 小さい leaf でボクセル数が int32 を超える。**当初「空の点群を返す」と記録したが誤り** — PCL 1.12 / 1.13 / 1.14 いずれも `PCL_WARN` を stderr に出して `output = *input_` で**入力を素通しする**(`voxel_grid.hpp` の該当行で確認)。つまり間引きが黙ってスキップされ全点が voxelmap に入る。Step 12 でノード側から診断 WARN を出すようにした。
   **`pcl::ApproximateVoxelGrid` に替えてはいけない** — 上流作者が [KOKIAOKI/3d_bbs#38](https://github.com/KOKIAOKI/3d_bbs/issues/38) で「target 点群への ApproximateVoxelGrid は 3D-BBS の位置推定に悪影響がある。自前の点群を使う場合は `voxel_grid` などを使うこと(空の点群が出ることに注意)」と明言している。topic モードの `pcl::VoxelGrid` はこの推奨に沿っており、変更しない。
 - DoD: 動作中に `ros2 topic pub` で地図を切替できる ✅。
 
@@ -273,6 +273,20 @@ launch / rviz / config 設定のみの変更。TDD 対象外。
   - `GpuBackend` は double インタフェースからの float 変換で target 点群 1 本分の一時領域を確保する(`set_src_points` も localize ごとに 1 本)。実行時切替と引き換えのコストで、巨大地図ではピークメモリが増える。気になる場合は node 側で double 配列を早期解放するか、GPU 専用ビルドで float 直渡しにする最適化が候補。
   - `broadcast_viewer_frame` は空点群を防御していない(`points[0]` 参照と 0 除算)。上流 `pciof::load_tar_clouds` は「ディレクトリは存在するが `.pcd` が 1 つも無い」場合に true を返すため、その構成で NaN TF を publish しうる。Step 11 の範囲外(既存の挙動)として別 PR で対応。
 - DoD: GPU 非搭載マシンで手順を変えずに `colcon build` → `ros2 launch` が通り、localize が成功する ✅(合成地図 + 合成スキャンで `Localize: success (score=182, time=39.3 ms)`、推定 x=3.00 y=-2.00 yaw=0.449 / 真値 x=3.0 y=-2.0 yaw=0.5)。
+
+### Step 12 — topic モード target 前処理の堅牢化と診断改善  ✅ 完了
+**TDD 適用**。
+
+Step 11 マージ後、topic のみの運用(`pcl_ros pcd_to_pointcloud` + CPU バックエンド)を実機検証する過程で `target_cloud_callback` の前処理に 2 つの穴が見つかったため対応した。
+
+- [x] **非有限点 (NaN/Inf) の除去**: `pcl::VoxelGrid` が非有限点を除くのは `is_dense == false` のときだけで、`tar_leaf_size: 0.0` や leaf size 過小(PCL が素通しする)経路では NaN がそのまま通り、`broadcast_viewer_frame` の centroid が NaN → **`map -> viewer` の TF が `(nan, nan, nan)` になる**(RED テストで実測)。匿名 namespace の `sanitize_cloud()` で除去し、落とした数を WARN に出す。全点が非有限なら early return。
+- [x] **leaf size 過小の診断**: `min_feasible_leaf_size()` が PCL と同じ式(`(int64)(extent / leaf) + 1` の 3 軸積 > `INT32_MAX`)で先回り判定し、超える場合は地図の外形と「これ以上なら収まる leaf size」を RCLCPP_WARN に出す。**間引き自体の挙動は PCL に任せ、ユーザ指定値を勝手に変えない**。
+  実測(`target.pcd` = 9,238,897 点 / 404 x 430 x 70 m): `tar_leaf_size: 0.1` → `tar_leaf_size 0.100 is too small for this map (404 x 430 x 70 m): PCL skips the downsample and the full cloud is used. Use 0.20 or larger.` が出て 9,238,897 点のまま構築 4.4 s、`0.5` では警告なしで 982,869 点・構築 1.7 s。
+- [x] **bbox は sanitize と同じ 1 パスで計算**して余分な走査を避ける。追加コストは 9.2M 点で 60〜69 ms。main(Step 11)との A/B で voxelmap 構築時間に有意差なし(main 1748〜1901 ms / Step 12 1716〜1836 ms)。
+- [x] テスト: `test/test_target_cloud_nan.py`(NaN 混じり target を publish → `/tf` の `viewer` translation が有限であること。RED では `(nan, nan, nan)`)、`test/test_target_cloud_leaf_warning.py`(3 軸 2000 m の 4 点 + `tar_leaf_size: 0.001` で WARN が出ること + 前提条件として PCL が素通しすること)。どちらも topic モード fixture の `tar_leaf_size` を置換するだけで **PCD 不要**。
+- [x] `package.xml` に `tf2_msgs` を `test_depend` として追加(TF 購読のため)。
+- [x] README のトラブルシューティングを訂正(「空になる」→「間引きがスキップされる」)し、`Dropped N non-finite points` の行を追加。
+- DoD: NaN 混じり target でも TF が壊れず、leaf size 過小がノードのログから分かる ✅。
 
 ---
 
