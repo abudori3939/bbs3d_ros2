@@ -10,8 +10,6 @@ https://github.com/user-attachments/assets/fc4b50d1-b303-477b-a6aa-9d409b80988f
 > [!NOTE]
 > 本家はこちら -> **https://github.com/KOKIAOKI/3d_bbs**
 
-> **Status:** 未完成。作業中です。
-
 ## 対応環境
 - Ubuntu 22.04
 - ROS 2 humble
