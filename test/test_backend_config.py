@@ -19,6 +19,7 @@ from pathlib import Path
 
 import launch
 import launch_ros.actions
+import launch_testing
 import launch_testing.actions
 import pytest
 
@@ -62,6 +63,9 @@ class TestCpuBackendSelected(unittest.TestCase):
             timeout=LOG_WAIT_TIMEOUT_SEC,
         )
 
+
+@launch_testing.post_shutdown_test()
+class TestCleanup(unittest.TestCase):
     def test_remove_temp_yaml(self, tmp_yaml):
         try:
             os.unlink(tmp_yaml)
