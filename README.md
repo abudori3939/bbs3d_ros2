@@ -183,6 +183,46 @@ DDS の QoS マッチング規則(`pub.durability >= sub.durability`)で接続�
 - 再構築中(数秒)に `~/localize` を叩くと **再構築完了まで blocking で待たされた後** に通常 localize 結果が返る(クライアント側のタイムアウトは future の `wait_for` 等で制御してください)
 - 再構築完了後の localize は通常通り動作
 
+### CPU / GPU の切り替え
+GPU の無いマシンでも**同じ手順のまま**使えます(コマンド・launch・yaml は共通)。どちらの実装で動いているかは起動ログで確認できます:
+
+```
+[INFO] [bbs3d_ros2_node]: 3D-BBS backend: CPU
+```
+
+実装の選択は 2 段階です。
+
+**1. ビルド時**(どの実装をコンパイルするか) — CMake が自動判定します。CUDA と `/usr/local/lib/libgpu_bbs3d.so` が両方見つかれば GPU 実装込み、見つからなければ CPU 実装のみになります。判定結果は `colcon build` のログに出ます:
+
+```
+-- bbs3d_ros2: GPU backend = ON    # GPU + CPU 両方コンパイル
+-- bbs3d_ros2: GPU backend = OFF   # CPU のみ
+```
+
+GPU 機であえて CPU のみビルドしたい場合は `colcon build --packages-select bbs3d_ros2 --cmake-args -DBBS3D_ENABLE_GPU=OFF` を使います。
+
+**2. 実行時**(どちらを使うか) — yaml の `backend` で指定します。既定は `"auto"` なので、**GPU 機では GPU、非 GPU 機では CPU** が自動的に選ばれます。既存の yaml をそのまま使う場合は何も追記する必要はありません。
+
+```yaml
+# config/bbs3d_ros2.yaml
+backend: "auto"   # "auto"(既定) | "gpu" | "cpu"
+```
+
+| 値 | 挙動 |
+|---|---|
+| `"auto"` | GPU 実装を含むビルドなら GPU、CPU のみのビルドなら CPU |
+| `"gpu"` | 常に GPU。CPU のみのビルドでは起動時に ERROR を出して exit 1 |
+| `"cpu"` | 常に CPU(GPU 機で CPU の速度・精度を比較したいときなど)|
+
+不正な値を書いた場合は起動時に `backend must be 'auto', 'gpu' or 'cpu', got '...'` を出して終了します(黙って別の実装で動くことはありません)。
+
+CPU 実装は GPU 実装より大幅に遅いため、実用速度が必要なら以下を調整してください:
+
+- `src_leaf_size` を大きくして source 点群を減らす(探索コストは点数にほぼ比例)
+- `max_scan_range` を絞る
+- `min_level_res` を大きく / `max_level` を小さくして voxelmap の階層を浅くする
+- `timeout_msec` を設定して、時間内に見つからなければ失敗として返す
+
 ## ROS 2 インタフェース
 
 > 下表の Topic / Service 名はすべて [`config/bbs3d_ros2.yaml`](config/bbs3d_ros2.yaml) で変更可能です。yaml キーと既定値は [`## 設定`](#設定-configbbs3d_ros2yaml) を参照。
