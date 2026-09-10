@@ -262,6 +262,9 @@ CPU 実装は GPU 実装より大幅に遅いため、実用速度が必要な�
 
 ## 設定 (`config/bbs3d_ros2.yaml`)
 
+> [!IMPORTANT]
+> `tar_leaf_size` で target 点群を間引く際のフィルタは、**pcd モードは `pcl::ApproximateVoxelGrid`(上流 `load_tar_clouds`)、topic モードは `pcl::VoxelGrid`** と異なります。上流作者は [3d_bbs#38](https://github.com/KOKIAOKI/3d_bbs/issues/38) で「target 点群への ApproximateVoxelGrid は 3D-BBS の位置推定に悪影響がある。自前の点群では `voxel_grid` 等を使うこと」と報告しています。**自前地図を pcd モードで使う場合は `tar_leaf_size: 0.0`(間引き無効)にして、事前に `voxel_grid` で間引いた PCD を配置**してください。
+
 スキーマは上流 [`3d_bbs/ros2_test/config/ros2_test.yaml`](3d_bbs/ros2_test/config/ros2_test.yaml) と同じです。主な項目:
 
 | キー | 説明 |
@@ -297,6 +300,8 @@ CPU 実装は GPU 実装より大幅に遅いため、実用速度が必要な�
 | 起動時に `error while loading shared libraries: libcpu_bbs3d.so` | `sudo ldconfig` が未実行(`/usr/local/lib` が ld キャッシュに入っていない)|
 | GPU 機なのに `GPU backend = OFF` になる | 本家を `-DBUILD_CUDA=OFF` でビルドした、または CUDA が見つからない。`/usr/local/lib/libgpu_bbs3d.so` と `nvcc` を確認 |
 | 起動時に `backend: 'gpu' was requested but this build has no GPU support` | CPU のみでビルドしたパッケージに `backend: "gpu"` を指定している。`"auto"` / `"cpu"` にするか、GPU 環境でビルドし直す |
+| topic モードで `Received target cloud is empty after downsample` が出る | `tar_leaf_size` が小さすぎて `pcl::VoxelGrid` のボクセル数が int32 を溢れ、空の点群が返っている(PCL の仕様)。地図の外形が大きいほど溢れやすい(例: 404 x 430 x 70 m の地図では 0.1 で溢れ、0.5 なら OK)。`tar_leaf_size` を大きくすること |
+| 自前地図で推定精度が出ない(pcd モード)| pcd モードは上流 `pciof::load_tar_clouds` 経由で `pcl::ApproximateVoxelGrid` を使うが、作者が [3d_bbs#38](https://github.com/KOKIAOKI/3d_bbs/issues/38) で「target 点群への ApproximateVoxelGrid は位置推定に悪影響」と報告している(配布テストデータは downsample 済みのため影響なし)。自前地図では `tar_leaf_size: 0.0` にして**事前に `voxel_grid` で間引いた PCD** を置くか、`pcl::VoxelGrid` を使う topic モードを選ぶ |
 | CPU で 1 回の推定が非常に遅い | CPU 実装は GPU の数十倍遅い。`src_leaf_size` を大きくする / `max_scan_range` を絞る / `timeout_msec` を設定する |
 | `submodule update` 後に動作不安定 | 上流ヘッダだけ新しくなりライブラリが古いまま。Step 2 を再実行 |
 | `~/localize` を pub / call しても何も起きない | rosbag 再生中(`/livox/points` `/livox/imu` が流れている)か確認。Service なら `response.message` に `"point cloud not received"` / `"imu not received"` 等が乗る。Topic 経由のときはノードログに同じメッセージが出るので、トピック名やセンサデータの流れを確認 |

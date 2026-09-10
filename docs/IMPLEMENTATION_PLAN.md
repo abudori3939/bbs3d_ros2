@@ -249,6 +249,8 @@ launch / rviz / config 設定のみの変更。TDD 対象外。
 - [x] テスト: `test/test_target_source_mode.py`(topic モードで起動 → graph に sub が現れる / target 未受信状態の localize で `"target map not loaded"` reason / target publish 後にガードを抜けて別 reason に遷移)。専用 fixture `bbs3d_ros2_test_topic_mode.yaml` を分離し、PCD ファイル不要で CI で常に実行される。
 - [x] **PR #11 レビュー対応 follow-up**(2026-05-12): 初版で導入した `unique_lock(try_to_lock)` + `"target map reloading"` reason は、SingleThreadedExecutor + default callback group では到達不能であることが判明したため、`lock_guard` で待つ semantics に変更し reloading reason を削除。同時に topic モードの echo を downsample 後の点群に揃え(pcd 側と一致)、テスト fixture を分離して PCD 依存を撤去。
 - [x] **PR #11 follow-up: target_cloud QoS yaml 化**(2026-05-12): 実機検証で `pcl_ros` 等 REP-2003 非準拠 publisher(`volatile`+`reliable`、設定変更不可)と接続できない問題が判明。`target_cloud_qos_reliability` / `target_cloud_qos_durability` の 2 軸を yaml で切替可能化(`get_or` で optional 読込、文字列→`rclcpp::*Policy` enum 変換ヘルパ追加)。default は REP-2003 Maps 推奨(`reliable`+`transient_local`)を維持し既存ユーザ影響なし。TDD で進行(RED → GREEN)。テスト `test_target_qos_config.py` は `get_subscriptions_info_by_topic` で graph 上の sub QoS を assert。
+- [ ] **未対応(将来 follow-up、2026-09-10 の実機検証で判明)**: topic モードの `pcl::VoxelGrid` は広域地図 + 小さい leaf でボクセル数が int32 を溢れ、**空の点群を返す**(PCL の仕様)。例: 404 x 430 x 70 m の地図に `tar_leaf_size: 0.1` → cells ≈ 1.2e10 で溢れ、`Received target cloud is empty after downsample, ignoring` になる(0.5 なら 9.8e7 で OK)。現状 WARN は出るので追跡はできるが、「leaf size が小さすぎる」ことを示すメッセージにすると親切。
+  **`pcl::ApproximateVoxelGrid` に替えてはいけない** — 上流作者が [KOKIAOKI/3d_bbs#38](https://github.com/KOKIAOKI/3d_bbs/issues/38) で「target 点群への ApproximateVoxelGrid は 3D-BBS の位置推定に悪影響がある。自前の点群を使う場合は `voxel_grid` などを使うこと(空の点群が出ることに注意)」と明言している。topic モードの `pcl::VoxelGrid` はこの推奨に沿っており、変更しない。
 - DoD: 動作中に `ros2 topic pub` で地図を切替できる ✅。
 
 ### Step 11 — CPU バックエンド対応(GPU 非搭載マシンでの動作)  ✅ 完了
@@ -290,6 +292,15 @@ launch / rviz / config 設定のみの変更。TDD 対象外。
 | `ros2_test/config/ros2_test.yaml` | 参照 config スキーマ。 |
 | `ros2_test/rviz2/cmake/Findgpu_bbs3d.cmake` | 既に本パッケージ `cmake/` にコピー済。 |
 | `ros2_test/click_loc/` | `/click_loc` Bool を発行する Tk ボタン — 本パッケージでは移植しない(`ros2 topic pub` で代替)。 |
+
+## 上流の既知 issue(本リポジトリの挙動に影響するもの)
+- **[KOKIAOKI/3d_bbs#38](https://github.com/KOKIAOKI/3d_bbs/issues/38) — `ApproximateVoxelGrid` が 3D-BBS の性能に影響する**(2024-07-09、作者 KOKIAOKI 本人の報告、2026-09-10 時点 open)。要旨:
+  - target 点群への `ApproximateVoxelGrid` は **3D-BBS の位置推定に悪影響**を与える。
+  - 配布されているテストデータは既に downsample 済みなので影響は出ない。
+  - **自前の点群を使う場合は `voxel_grid` などを使うこと**(空の点群が出力されることに注意)。
+  - 「次のアップデートで修正予定」とあるが未修正。
+  
+  本リポジトリへの影響: **pcd モード**は上流 `pciof::load_tar_clouds` を呼ぶため `ApproximateVoxelGrid` が使われる(`tar_leaf_size != 0.0` のとき)。自前地図では `tar_leaf_size: 0.0` にして事前に `voxel_grid` で間引いた PCD を置くか、**topic モード**(`pcl::VoxelGrid` を使う)を選ぶのが安全。`3d_bbs/` は触らない方針のため、本リポジトリ側では上流が修正されるまでドキュメントで回避策を案内する。
 
 ## 上流に issue を投げる候補(本リポジトリでは触らない)
 - **IMU 時刻差計算のバグ**: `3d_bbs/ros2_test/rviz2/src/gpu_bbs3d_rviz2/gpu_ros2_test_rviz2.cpp:190-193` で `imu_t - cloud_t` を計算しているつもりが sec と nanosec の符号が混ざっている。`std::abs(imu_t - cloud_t)` の意図に対し、実装は概ね `std::abs((imu_sec - cloud_sec) + (imu_nano + cloud_nano)*1e-9)` 相当。
