@@ -13,15 +13,6 @@ std::unique_ptr<BbsBackend> create_cpu_backend();
 std::unique_ptr<BbsBackend> create_gpu_backend();
 #endif
 
-bool gpu_backend_available()
-{
-#ifdef BBS3D_HAS_GPU
-  return true;
-#else
-  return false;
-#endif
-}
-
 std::unique_ptr<BbsBackend> create_backend(BackendKind kind)
 {
   switch (kind) {

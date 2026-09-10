@@ -58,9 +58,6 @@ public:
   virtual Eigen::Matrix4d get_global_pose() const = 0;
 };
 
-// GPU 実装を含めてビルドされているか(= CMake が CUDA と gpu_bbs3d を見つけたか)。
-bool gpu_backend_available();
-
 // BackendKind::Gpu を指定したが GPU 実装を含まないビルドの場合は nullptr を返す。
 // 呼び出し側でエラーにすること。
 std::unique_ptr<BbsBackend> create_backend(BackendKind kind);

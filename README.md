@@ -190,7 +190,7 @@ GPU の無いマシンでも**同じ手順のまま**使えます(コマンド�
 [INFO] [bbs3d_ros2_node]: 3D-BBS backend: CPU
 ```
 
-実装の選択は 2 段階です。
+実装の選択は 2 段階です(どちらもユーザが意識せず既定のままで動きます)。
 
 **1. ビルド時**(どの実装をコンパイルするか) — CMake が自動判定します。CUDA と `/usr/local/lib/libgpu_bbs3d.so` が両方見つかれば GPU 実装込み、見つからなければ CPU 実装のみになります。判定結果は `colcon build` のログに出ます:
 
@@ -201,7 +201,7 @@ GPU の無いマシンでも**同じ手順のまま**使えます(コマンド�
 
 GPU 機であえて CPU のみビルドしたい場合は `colcon build --packages-select bbs3d_ros2 --cmake-args -DBBS3D_ENABLE_GPU=OFF` を使います。
 
-**2. 実行時**(どちらを使うか) — yaml の `backend` で指定します。既定は `"auto"` なので、**GPU 機では GPU、非 GPU 機では CPU** が自動的に選ばれます。既存の yaml をそのまま使う場合は何も追記する必要はありません。
+**2. 実行時**(どちらを使うか) — yaml の `backend` で指定します。既定は `"auto"` で、**上の「1. ビルド時」の判定結果**に従います(GPU 込みでビルドされていれば GPU、CPU のみのビルドなら CPU)。既存の yaml をそのまま使う場合は何も追記する必要はありません。
 
 ```yaml
 # config/bbs3d_ros2.yaml
@@ -216,12 +216,18 @@ backend: "auto"   # "auto"(既定) | "gpu" | "cpu"
 
 不正な値を書いた場合は起動時に `backend must be 'auto', 'gpu' or 'cpu', got '...'` を出して終了します(黙って別の実装で動くことはありません)。
 
+> [!NOTE]
+> `"auto"` の判定は **ビルド時**に決まります。GPU 機でビルドしたバイナリを GPU の見えない環境(`--gpus` 無しのコンテナ、ドライバ不整合など)で動かすと GPU 実装のまま起動して CUDA 側で失敗します。その場合は `backend: "cpu"` を明示するか、その環境でビルドし直してください。
+
 CPU 実装は GPU 実装より大幅に遅いため、実用速度が必要なら以下を調整してください:
 
 - `src_leaf_size` を大きくして source 点群を減らす(探索コストは点数にほぼ比例)
 - `max_scan_range` を絞る
-- `min_level_res` を大きく / `max_level` を小さくして voxelmap の階層を浅くする
+- `min_level_res` を大きくして最下層の voxel 解像度を粗くする(精度と引き換え)
 - `timeout_msec` を設定して、時間内に見つからなければ失敗として返す
+
+> [!WARNING]
+> `max_level` を **小さく** すると探索開始階層が細かくなり、初期変換集合が増えて **逆に遅くなります**。高速化目的で下げないでください。
 
 ## ROS 2 インタフェース
 

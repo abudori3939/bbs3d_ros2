@@ -1,6 +1,7 @@
 // Copyright 2026 Iwana Robotics
 #include "bbs3d_ros2/bbs3d_backend.hpp"
 
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -41,9 +42,18 @@ public:
     bbs3d_.set_src_points(to_float(points));
   }
 
+  // 上流の vector 版は点群から bbox を求めるだけなので、点群全体を float 化
+  // せずに double のまま bbox を計算して 2 引数オーバーロードに渡す
+  // (target 点群サイズの一時確保を 1 回分減らす)。
   void set_trans_search_range(const std::vector<Eigen::Vector3d> & points) override
   {
-    bbs3d_.set_trans_search_range(to_float(points));
+    Eigen::Vector3d min_xyz = Eigen::Vector3d::Constant(std::numeric_limits<double>::max());
+    Eigen::Vector3d max_xyz = Eigen::Vector3d::Constant(std::numeric_limits<double>::lowest());
+    for (const auto & p : points) {
+      min_xyz = min_xyz.cwiseMin(p);
+      max_xyz = max_xyz.cwiseMax(p);
+    }
+    bbs3d_.set_trans_search_range(min_xyz.cast<float>(), max_xyz.cast<float>());
   }
 
   bool set_voxelmaps_coords(const std::string & folder_path) override

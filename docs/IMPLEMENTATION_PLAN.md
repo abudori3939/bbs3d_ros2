@@ -267,6 +267,9 @@ launch / rviz / config 設定のみの変更。TDD 対象外。
 - [ ] **未対応(将来 follow-up)**:
   - CPU 実装の `set_num_threads`(上流 default 4 固定)を yaml から設定可能にする。CPU で実機性能を出すには実質必要。
   - GPU 実装側の回帰確認。実装者の開発機に GPU が無いため、GPU ビルドは未検証(コンパイル・動作ともメンテナ環境での確認が必要)。
+  - `backend: "auto"` の判定はビルド時のみ。GPU 機でビルドしたバイナリを GPU の見えない環境(`--gpus` 無しコンテナ等)で動かすと GPU 実装のまま起動して CUDA 側で落ちる。`Auto` 分岐に `cudaGetDeviceCount` の実行時プローブを入れて CPU にフォールバックする案がある(現状は README で注意喚起のみ)。
+  - `GpuBackend` は double インタフェースからの float 変換で target 点群 1 本分の一時領域を確保する(`set_src_points` も localize ごとに 1 本)。実行時切替と引き換えのコストで、巨大地図ではピークメモリが増える。気になる場合は node 側で double 配列を早期解放するか、GPU 専用ビルドで float 直渡しにする最適化が候補。
+  - `broadcast_viewer_frame` は空点群を防御していない(`points[0]` 参照と 0 除算)。上流 `pciof::load_tar_clouds` は「ディレクトリは存在するが `.pcd` が 1 つも無い」場合に true を返すため、その構成で NaN TF を publish しうる。Step 11 の範囲外(既存の挙動)として別 PR で対応。
 - DoD: GPU 非搭載マシンで手順を変えずに `colcon build` → `ros2 launch` が通り、localize が成功する ✅(合成地図 + 合成スキャンで `Localize: success (score=182, time=39.3 ms)`、推定 x=3.00 y=-2.00 yaw=0.449 / 真値 x=3.0 y=-2.0 yaw=0.5)。
 
 ---
