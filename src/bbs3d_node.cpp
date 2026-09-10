@@ -115,24 +115,28 @@ CloudStats sanitize_cloud(pcl::PointCloud<pcl::PointXYZ> & cloud)
 std::optional<float> min_feasible_leaf_size(
   const Eigen::Array3f & min_p, const Eigen::Array3f & max_p, const float leaf)
 {
-  const Eigen::Array3d extent = (max_p - min_p).cast<double>();
+  const Eigen::Array3f extent = max_p - min_p;
   constexpr int64_t kMaxCells = std::numeric_limits<int32_t>::max();
 
-  // PCL: dx = (int64)(extent * (1/leaf)) + 1 の 3 軸積。
-  // ただし極端に小さい leaf では積が int64 を溢れる(符号付き overflow = UB)ため、
-  // 途中で上限超過が確定した時点で打ち切る。戻り値は「上限を超えたか」だけを見る。
-  const auto exceeds_limit = [&extent, kMaxCells](const double l) {
+  // PCL と同じ算術で判定する: dx = (int64)(extent * (1/leaf)) + 1 の 3 軸積。
+  // 除算 (extent / leaf) では丸めが PCL の float 乗算とわずかにずれ、閾値の
+  // 近傍で「ノードは無警告なのに PCL は素通しする」取りこぼしが起きるため、
+  // inverse_leaf_size を float で作って乗算する形に揃える。
+  // 極端に小さい leaf では積が int64 を溢れる(符号付き overflow = UB)ので、
+  // 上限超過が確定した時点で打ち切る。
+  const auto exceeds_limit = [&extent](const float l) {
+      const float inv = 1.0f / l;
       int64_t product = 1;
       for (int i = 0; i < 3; ++i) {
-        const double d = std::floor(extent[i] / l) + 1.0;
-        if (d > static_cast<double>(kMaxCells)) {
+        const float d_f = extent[i] * inv;
+        if (!(d_f < static_cast<float>(kMaxCells))) {
+          return true;  // int64 への cast 前に溢れ / 非有限を弾く
+        }
+        const int64_t d = static_cast<int64_t>(d_f) + 1;
+        if (d > kMaxCells / product) {
           return true;
         }
-        const int64_t di = static_cast<int64_t>(d);
-        if (di > kMaxCells / product) {
-          return true;
-        }
-        product *= di;
+        product *= d;
       }
       return product > kMaxCells;
     };
@@ -141,11 +145,22 @@ std::optional<float> min_feasible_leaf_size(
     return std::nullopt;
   }
 
-  // 解析近似 cbrt(ex*ey*ez / kMaxCells) を初期値に、実際の式で収まるまで広げる。
-  double suggestion = std::cbrt(
-    extent[0] * extent[1] * extent[2] / static_cast<double>(kMaxCells));
+  // 初期値は「非退化軸のみ」で見積もる。平面地図(z の extent が 0)などで
+  // 3 乗根を使うと 0 に潰れ、leaf からの 1.1 倍刻みでは収束しきらずに
+  // 「設定しても直らない値」を勧めてしまうため。
+  double product = 1.0;
+  int dims = 0;
+  for (int i = 0; i < 3; ++i) {
+    if (extent[i] > 0.0f) {
+      product *= static_cast<double>(extent[i]);
+      ++dims;
+    }
+  }
+  double suggestion = (dims > 0)
+    ? std::pow(product / static_cast<double>(kMaxCells), 1.0 / dims)
+    : static_cast<double>(leaf);
   suggestion = std::max(suggestion, static_cast<double>(leaf));
-  for (int i = 0; i < 64 && exceeds_limit(suggestion); ++i) {
+  for (int i = 0; i < 256 && exceeds_limit(static_cast<float>(suggestion)); ++i) {
     suggestion *= 1.1;
   }
   return static_cast<float>(suggestion);

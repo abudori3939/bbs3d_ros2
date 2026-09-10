@@ -42,8 +42,19 @@ FIXTURE_YAML = (
 )
 TARGET_TOPIC_NAME = "/_bbs3d_ros2_test/nan_target"
 VIEWER_FRAME_ID = "viewer"
+NUM_FINITE_POINTS = 50
+# 有限点 (i, 0.1*i, 0) i=0..49 の重心。ノードが NaN を落としていれば
+# broadcast される viewer TF はこの値になる。同一 domain の別ノードが
+# 流す viewer TF を誤って拾って GREEN になるのを防ぐため、値まで assert する。
+EXPECTED_CENTROID = (
+    sum(range(NUM_FINITE_POINTS)) / NUM_FINITE_POINTS,
+    sum(i * 0.1 for i in range(NUM_FINITE_POINTS)) / NUM_FINITE_POINTS,
+    0.0,
+)
+CENTROID_TOLERANCE = 1e-3
 DISCOVERY_TIMEOUT_SEC = 20.0
 TF_TIMEOUT_SEC = 20.0
+PUBLISH_RETRIES = 5
 
 
 @pytest.mark.launch_test
@@ -74,7 +85,8 @@ def generate_test_description():
 
 def _make_pointcloud_with_nan() -> PointCloud2:
     # 有限点 50 点 + NaN 点 3 点。NaN が落とされれば centroid は有限になる。
-    points = [(float(i), float(i) * 0.1, 0.0) for i in range(50)]
+    points = [(float(i), float(i) * 0.1, 0.0)
+              for i in range(NUM_FINITE_POINTS)]
     points += [(math.nan, 0.0, 0.0), (0.0, math.nan, 0.0),
                (0.0, 0.0, math.nan)]
     header = Header()
@@ -139,10 +151,20 @@ class TestTargetCloudWithNaN(unittest.TestCase):
         target_pub = self.observer_node.create_publisher(
             PointCloud2, TARGET_TOPIC_NAME, qos
         )
-        target_pub.publish(_make_pointcloud_with_nan())
 
+        # viewer TF は target 1 通につき 1 回しか broadcast されず、/tf は
+        # volatile なので、subscription のマッチが間に合わないと取りこぼす。
+        # target を撒き直して retry する(topic モードは何度受けても良い)。
+        got_tf = False
+        for _ in range(PUBLISH_RETRIES):
+            target_pub.publish(_make_pointcloud_with_nan())
+            got_tf = self._wait_for(
+                lambda: bool(received), TF_TIMEOUT_SEC / PUBLISH_RETRIES
+            )
+            if got_tf:
+                break
         self.assertTrue(
-            self._wait_for(lambda: bool(received), TF_TIMEOUT_SEC),
+            got_tf,
             f"No {VIEWER_FRAME_ID} transform broadcast within "
             f"{TF_TIMEOUT_SEC}s",
         )
@@ -155,6 +177,14 @@ class TestTargetCloudWithNaN(unittest.TestCase):
             "(non-finite points from the target cloud leaked into the "
             "centroid)",
         )
+        # 値まで確認する: 同一 ROS_DOMAIN_ID の別ノードが流した viewer TF を
+        # 拾っていた場合、有限ではあっても期待値と一致しない。
+        for axis, actual, expected in zip("xyz", values, EXPECTED_CENTROID):
+            self.assertAlmostEqual(
+                actual, expected, delta=CENTROID_TOLERANCE,
+                msg=f"viewer TF {axis} must be the centroid of the finite "
+                    f"points ({expected}), got {actual}",
+            )
 
 
 @launch_testing.post_shutdown_test()
