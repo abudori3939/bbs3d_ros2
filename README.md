@@ -15,9 +15,18 @@ https://github.com/user-attachments/assets/fc4b50d1-b303-477b-a6aa-9d409b80988f
 ## 対応環境
 - Ubuntu 22.04
 - ROS 2 humble
-- CUDA 12.0+
 - Eigen 3.4+(submodule 経由で取得)
-- NVIDIA GPU(3D-BBS の voxelmap 構築・探索に必要)
+- NVIDIA GPU + CUDA 12.0+ — **任意**。GPU がある環境では GPU 実装を、無い環境では CPU 実装を使います
+
+本家 3D-BBS は GPU 実装 (`gpu_bbs3d`) と CPU 実装 (`cpu_bbs3d`) の両方を提供しています。
+本パッケージはビルド時に CUDA と `libgpu_bbs3d.so` の有無を自動判定し、見つかれば GPU 実装込みで、
+見つからなければ CPU 実装のみでビルドします。**使い方(コマンド・launch・yaml)は同じです**。
+実行時にどちらを使うかは yaml の `backend`(既定 `"auto"`)で切り替えられ、起動ログに
+`3D-BBS backend: GPU` / `3D-BBS backend: CPU` として出ます。
+
+> [!NOTE]
+> CPU 実装は GPU 実装より大幅に遅く、点群サイズや探索範囲によっては 1 回の推定に数秒〜数十秒かかります。
+> `src_leaf_size` を大きくする / `max_scan_range` を絞る / `timeout_msec` を設定する、などで調整してください。
 
 ## インストール
 ### 1. このリポジトリを `--recursive` で clone
@@ -45,6 +54,17 @@ mkdir -p build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j
 sudo make install
+sudo ldconfig   # /usr/local/lib のライブラリを ld キャッシュに登録
+```
+
+**GPU / CUDA が無いマシンでは `-DBUILD_CUDA=OFF` を付けます**(本家の CMake は既定で CUDA を必須とするため、
+付けないと configure が失敗します)。CPU 実装 `libcpu_bbs3d.so` はこのオプションに関係なくインストールされます。
+
+```bash
+cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_CUDA=OFF
+make -j
+sudo make install
+sudo ldconfig
 ```
 
 > **重要:** `git submodule update` で `3d_bbs/` を更新したときは、**必ずこのステップを再実行**してください。古いライブラリと新しいヘッダの不整合で実行時エラーになることがあります。
@@ -76,6 +96,15 @@ source install/setup.bash
 ```
 
 > ビルドタイプは `CMakeLists.txt` で Release をデフォルトにしています。デバッグ目的で切り替えたい場合は `--cmake-args -DCMAKE_BUILD_TYPE=Debug`(または `RelWithDebInfo`)を付けてください。
+
+GPU 実装を含めたかどうかは configure ログに出ます:
+
+```
+-- bbs3d_ros2: GPU backend = ON    # CUDA と libgpu_bbs3d.so が見つかった
+-- bbs3d_ros2: GPU backend = OFF   # 見つからないので CPU 実装のみ
+```
+
+自動判定を上書きしたい場合は `--cmake-args -DBBS3D_ENABLE_GPU=OFF`(GPU 機で CPU のみビルド)/ `=ON` を指定します。
 
 ## 動作デモ
 
@@ -199,6 +228,7 @@ DDS の QoS マッチング規則(`pub.durability >= sub.durability`)で接続�
 | `tar_leaf_size` / `src_leaf_size` | ダウンサンプル(0.0 で off) |
 | `min_scan_range` / `max_scan_range` | source 点群のクロップ [m] |
 | `timeout_msec` | 探索タイムアウト(0 で off) |
+| `backend` | 使用する 3D-BBS 実装(既定 `"auto"`、`"gpu"` / `"cpu"` で固定)|
 | `tar_points_topic_name` | target 点群 publisher 名(既定 `/tar_points`) |
 | `src_points_on_global_pose_topic_name` | source 点群 publisher 名(既定 `/src_points_on_global_pose`) |
 | `global_pose_topic_name` | 推定 pose publisher 名(既定 `/global_pose`) |
@@ -217,7 +247,11 @@ DDS の QoS マッチング規則(`pub.durability >= sub.durability`)で接続�
 | 症状 | 原因 / 対処 |
 |---|---|
 | `[ERROR] Can not open folder` の直後に segfault | `target_clouds` がプレースホルダ(`/path/to/target`)のまま、または存在しないパス。**絶対パス**を指定すること。フェーズ B(Step 8)で graceful error に改善予定 |
-| ビルドが `find_package(gpu_bbs3d) failed` で失敗 | Step 2(本家 `sudo make install`)が未実行。`/usr/local/lib/libgpu_bbs3d.so` を確認 |
+| ビルドが `find_package(cpu_bbs3d) failed` で失敗 | Step 2(本家 `sudo make install`)が未実行。`/usr/local/lib/libcpu_bbs3d.so` を確認 |
+| 起動時に `error while loading shared libraries: libcpu_bbs3d.so` | `sudo ldconfig` が未実行(`/usr/local/lib` が ld キャッシュに入っていない)|
+| GPU 機なのに `GPU backend = OFF` になる | 本家を `-DBUILD_CUDA=OFF` でビルドした、または CUDA が見つからない。`/usr/local/lib/libgpu_bbs3d.so` と `nvcc` を確認 |
+| 起動時に `backend: 'gpu' was requested but this build has no GPU support` | CPU のみでビルドしたパッケージに `backend: "gpu"` を指定している。`"auto"` / `"cpu"` にするか、GPU 環境でビルドし直す |
+| CPU で 1 回の推定が非常に遅い | CPU 実装は GPU の数十倍遅い。`src_leaf_size` を大きくする / `max_scan_range` を絞る / `timeout_msec` を設定する |
 | `submodule update` 後に動作不安定 | 上流ヘッダだけ新しくなりライブラリが古いまま。Step 2 を再実行 |
 | `~/localize` を pub / call しても何も起きない | rosbag 再生中(`/livox/points` `/livox/imu` が流れている)か確認。Service なら `response.message` に `"point cloud not received"` / `"imu not received"` 等が乗る。Topic 経由のときはノードログに同じメッセージが出るので、トピック名やセンサデータの流れを確認 |
 

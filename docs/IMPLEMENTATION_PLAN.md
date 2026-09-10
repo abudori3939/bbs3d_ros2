@@ -31,10 +31,15 @@
 bbs3d_ros2/
 ├── package.xml
 ├── CMakeLists.txt
-├── cmake/Findgpu_bbs3d.cmake     # /usr/local 配下の gpu_bbs3d を探す
+├── cmake/Findgpu_bbs3d.cmake     # /usr/local 配下の gpu_bbs3d を探す(任意)
+├── cmake/Findcpu_bbs3d.cmake     # 同 cpu_bbs3d(必須)
 ├── include/bbs3d_ros2/bbs3d_node.hpp
+├── include/bbs3d_ros2/bbs3d_backend.hpp  # GPU/CPU 実装の仮想インタフェース
 ├── src/bbs3d_node.cpp
 ├── src/bbs3d_node_main.cpp
+├── src/bbs3d_backend.cpp         # factory(#ifdef BBS3D_HAS_GPU はここだけ)
+├── src/bbs3d_backend_cpu.cpp
+├── src/bbs3d_backend_gpu.cpp     # GPU 入りビルドのみコンパイル
 ├── launch/bbs3d_rviz2.launch.py
 ├── config/bbs3d_ros2.yaml
 ├── rviz/bbs3d.rviz
@@ -49,8 +54,8 @@ bbs3d_ros2/
 
 ### 共通方針(フェーズ A / B 共通)
 1. **上流は submodule + COLCON_IGNORE**。 ament パッケージは 1 つに保ち、上流のネストされた ament パッケージを colcon が走査しないようにする。
-2. **`gpu_bbs3d` は `/usr/local` インストール経由で発見**。 本パッケージは CUDA を再コンパイルしない。`find_package(gpu_bbs3d)` は本リポジトリ `cmake/Findgpu_bbs3d.cmake`(上流からコピー)で解決する。
-3. **本 CMake で CUDA 言語は有効化しない**。 `libgpu_bbs3d.so` をリンクし CUDA ヘッダ(`<cuda_runtime.h>`、thrust)を include するだけなので、`find_package(CUDA REQUIRED)`(legacy module)で十分。
+2. **`gpu_bbs3d` / `cpu_bbs3d` は `/usr/local` インストール経由で発見**。 本パッケージは CUDA を再コンパイルしない。`find_package(gpu_bbs3d)` / `find_package(cpu_bbs3d)` は本リポジトリ `cmake/Find*.cmake`(上流からコピー)で解決する。Step 11 以降、`cpu_bbs3d` は必須、`gpu_bbs3d` は任意(見つかったときだけ GPU 実装をコンパイル)。
+3. **本 CMake で CUDA 言語は有効化しない**。 `libgpu_bbs3d.so` をリンクし CUDA ヘッダ(`<cuda_runtime.h>`、thrust)を include するだけなので、`find_package(CUDA)`(legacy module)で十分。
 4. **`3d_bbs/` 配下は触らない**。 構造改変・インストール支援スクリプトも含めて行わない。
 5. **設定は yaml 一本**。 上流の `ros2_test.yaml` スキーマを踏襲し、ROS 2 パラメータでの上書きは入れない。フェーズ B で yaml 項目は増やすが、入口は yaml に固定。
 
@@ -63,6 +68,7 @@ bbs3d_ros2/
 9. **全トピック名(出力含む)+ トリガトピック名を yaml で変更可能にする**。 デフォルト値は上流互換。
 10. **target 点群は PCD / topic の 2 モードを yaml で切替**。 `target_source_mode: "pcd" | "topic"`。topic モードは latched (`transient_local` QoS) で受信し、地図ホットスワップ(動作中の地図切替)を可能にする。
 11. **エラーハンドリングを構造化**。 `std::cout` を `RCLCPP_INFO/WARN/ERROR` に置換、起動時に PCD パス・読み込み件数を診断、ランタイムは `/scan` `/imu` 未受信を周期 WARN、localize 結果の成否理由を構造化ログに出す。
+12. **GPU / CPU 実装を 2 層で切替**(Step 11)。 GPU 実装を含めるかは CMake がビルド時に自動判定(CUDA + `libgpu_bbs3d.so` の有無)し、どちらを使うかは yaml `backend` で実行時に決める。ユーザ手順(`colcon build` / launch / yaml)は GPU 機・非 GPU 機で同一に保つ。ノードは仮想インタフェース越しにしか BBS3D を触らず、スカラは double に統一する(float 変換は GPU 実装側に閉じ込め)。
 
 ## ステップと進捗
 
@@ -245,13 +251,34 @@ launch / rviz / config 設定のみの変更。TDD 対象外。
 - [x] **PR #11 follow-up: target_cloud QoS yaml 化**(2026-05-12): 実機検証で `pcl_ros` 等 REP-2003 非準拠 publisher(`volatile`+`reliable`、設定変更不可)と接続できない問題が判明。`target_cloud_qos_reliability` / `target_cloud_qos_durability` の 2 軸を yaml で切替可能化(`get_or` で optional 読込、文字列→`rclcpp::*Policy` enum 変換ヘルパ追加)。default は REP-2003 Maps 推奨(`reliable`+`transient_local`)を維持し既存ユーザ影響なし。TDD で進行(RED → GREEN)。テスト `test_target_qos_config.py` は `get_subscriptions_info_by_topic` で graph 上の sub QoS を assert。
 - DoD: 動作中に `ros2 topic pub` で地図を切替できる ✅。
 
+### Step 11 — CPU バックエンド対応(GPU 非搭載マシンでの動作)  ✅ 完了
+**TDD 適用**(yaml キー追加 = ノードの機能追加のため)。
+
+動機: 本パッケージは `gpu::BBS3D` 決め打ちで、CUDA の無いマシンでは configure 段階で失敗し `colcon build` すら通らなかった。上流 3d_bbs は CPU 実装 (`cpu::BBS3D` / `libcpu_bbs3d.so`) を `BUILD_CUDA` に関係なく常にビルド・インストールしており、API は GPU 版とほぼ同一(差分は namespace と スカラ型 float/double、GPU 専用 `set_branch_copy_size`、CPU 専用 `set_num_threads`)。
+
+- [x] **バックエンド抽象化**: `include/bbs3d_ros2/bbs3d_backend.hpp` に仮想インタフェース `BbsBackend` + `create_backend(BackendKind)` を定義。実装は `src/bbs3d_backend_cpu.cpp` / `src/bbs3d_backend_gpu.cpp`、`#ifdef BBS3D_HAS_GPU` の分岐は `src/bbs3d_backend.cpp` の factory 1 箇所だけ。**インタフェースのスカラは double に統一**し、float への往復キャストは `GpuBackend` に閉じ込めた(`pciof::pcl_to_eigen<T>` はテンプレートなので `Vector3d` でそのまま使える)。本ヘッダは `bbs3d.cuh` / `bbs3d.hpp` を include しないため、CUDA ヘッダ(`cuda_runtime.h` / thrust)がノード側の翻訳単位に漏れない。
+- [x] **2 層の切替**:
+  - ビルド時(CMake が自動判定): `find_package(CUDA QUIET)` + `find_package(gpu_bbs3d QUIET)` が両方成功したときのみ GPU 実装をコンパイルし `BBS3D_HAS_GPU` を定義。`-DBBS3D_ENABLE_GPU=ON/OFF` で上書き可。configure ログに `-- bbs3d_ros2: GPU backend = ON/OFF` を出す。
+  - 実行時(yaml): `backend: "auto" | "gpu" | "cpu"`(default `"auto"`、`get_or` で optional 読込のため既存 yaml は無変更で動く)。`"auto"` は GPU 入りビルドなら GPU。`"gpu"` を CPU のみのビルドで指定したら起動時 ERROR + exit 1。不正値は `load_config` で弾く(`target_source_mode` / QoS 文字列と同じパターン)。
+  - 起動時に `3D-BBS backend: GPU|CPU` を INFO ログに出す(どちらで動いているか分からないと実行時切替が使えないため)。
+- [x] `cmake/Findcpu_bbs3d.cmake`(上流 `test/cmake/` の逐語コピー)を追加。`cpu_bbs3d` は REQUIRED、`gpu_bbs3d` は QUIET。CPU 実装は OpenMP を使うため `find_package(OpenMP)` + `OpenMP::OpenMP_CXX` をリンク。
+- [x] テスト: `test/test_backend_config.py`(`backend: "cpu"` 指定で `3D-BBS backend: CPU` ログ)、`test/test_backend_invalid_value.py`(不正値で ERROR ログ + exit 1)。どちらも topic モード fixture を使うため PCD 不要。GPU 指定 × CPU のみビルドのケースはビルド構成で結果が反転するため自動テストには含めず手動確認(ERROR + exit 1 を確認済み)。
+- [x] ドキュメント: README(対応環境 / `-DBUILD_CUDA=OFF` / `sudo ldconfig` / 設定表 / トラブルシューティング)、`config/bbs3d_ros2.yaml`、CLAUDE.md を更新。
+- [ ] **未対応(将来 follow-up)**:
+  - CPU 実装の `set_num_threads`(上流 default 4 固定)を yaml から設定可能にする。CPU で実機性能を出すには実質必要。
+  - GPU 実装側の回帰確認。実装者の開発機に GPU が無いため、GPU ビルドは未検証(コンパイル・動作ともメンテナ環境での確認が必要)。
+- DoD: GPU 非搭載マシンで手順を変えずに `colcon build` → `ros2 launch` が通り、localize が成功する ✅(合成地図 + 合成スキャンで `Localize: success (score=182, time=39.3 ms)`、推定 x=3.00 y=-2.00 yaw=0.449 / 真値 x=3.0 y=-2.0 yaw=0.5)。
+
 ---
 
 ## 上流の主な参照
 | パス(上流 `3d_bbs/` からの相対) | 役割 |
 |---|---|
 | `CMakeLists.txt` | トップレベルの非 ament CMake。`sudo make install` で `/usr/local` に配置。 |
-| `bbs3d/include/gpu_bbs3d/bbs3d.cuh` | 本パッケージが使う公開 API。 |
+| `bbs3d/include/gpu_bbs3d/bbs3d.cuh` | 本パッケージが使う GPU 版の公開 API(float)。 |
+| `bbs3d/include/cpu_bbs3d/bbs3d.hpp` | 同 CPU 版(double)。`BUILD_CUDA` に関係なく常にビルドされる。 |
+| `test/src/cpu_test.cpp` | CPU 版の呼び出し順序の参照(Step 11)。 |
+| `test/cmake/Findcpu_bbs3d.cmake` | 本パッケージ `cmake/Findcpu_bbs3d.cmake` の移植元。 |
 | `bbs3d/include/pointcloud_iof/{pcl_eigen_converter,pcd_loader,gravity_alignment}.hpp` | 本パッケージが使うユーティリティ。 |
 | `ros2_test/rviz2/include/ros2_test_rviz2.hpp` | `bbs3d_node.hpp` の移植元。 |
 | `ros2_test/rviz2/src/gpu_bbs3d_rviz2/gpu_ros2_test_rviz2.cpp` | `bbs3d_node.cpp` の移植元。 |
