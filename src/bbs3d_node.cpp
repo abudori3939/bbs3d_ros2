@@ -118,16 +118,26 @@ std::optional<float> min_feasible_leaf_size(
   const Eigen::Array3d extent = (max_p - min_p).cast<double>();
   constexpr int64_t kMaxCells = std::numeric_limits<int32_t>::max();
 
-  // PCL: dx = (int64)(extent * (1/leaf)) + 1 の 3 軸積
-  const auto cells = [&extent](const double l) {
+  // PCL: dx = (int64)(extent * (1/leaf)) + 1 の 3 軸積。
+  // ただし極端に小さい leaf では積が int64 を溢れる(符号付き overflow = UB)ため、
+  // 途中で上限超過が確定した時点で打ち切る。戻り値は「上限を超えたか」だけを見る。
+  const auto exceeds_limit = [&extent, kMaxCells](const double l) {
       int64_t product = 1;
       for (int i = 0; i < 3; ++i) {
-        product *= static_cast<int64_t>(extent[i] / l) + 1;
+        const double d = std::floor(extent[i] / l) + 1.0;
+        if (d > static_cast<double>(kMaxCells)) {
+          return true;
+        }
+        const int64_t di = static_cast<int64_t>(d);
+        if (di > kMaxCells / product) {
+          return true;
+        }
+        product *= di;
       }
-      return product;
+      return product > kMaxCells;
     };
 
-  if (cells(leaf) <= kMaxCells) {
+  if (!exceeds_limit(leaf)) {
     return std::nullopt;
   }
 
@@ -135,7 +145,7 @@ std::optional<float> min_feasible_leaf_size(
   double suggestion = std::cbrt(
     extent[0] * extent[1] * extent[2] / static_cast<double>(kMaxCells));
   suggestion = std::max(suggestion, static_cast<double>(leaf));
-  for (int i = 0; i < 64 && cells(suggestion) > kMaxCells; ++i) {
+  for (int i = 0; i < 64 && exceeds_limit(suggestion); ++i) {
     suggestion *= 1.1;
   }
   return static_cast<float>(suggestion);
@@ -362,9 +372,9 @@ void Bbs3dNode::target_cloud_callback(
       const Eigen::Array3f extent = stats.max_p - stats.min_p;
       RCLCPP_WARN(
         get_logger(),
-        "tar_leaf_size %.3f is too small for this map (%.0f x %.0f x %.0f m): "
+        "tar_leaf_size %g is too small for this map (%.0f x %.0f x %.0f m): "
         "PCL skips the downsample and the full cloud is used. "
-        "Use %.2f or larger.",
+        "Use %g or larger.",
         tar_leaf_size, extent[0], extent[1], extent[2], *suggestion);
     }
     pcl::PointCloud<pcl::PointXYZ>::Ptr filtered(
