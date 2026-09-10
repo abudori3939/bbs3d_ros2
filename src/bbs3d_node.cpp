@@ -57,6 +57,15 @@ std::optional<rclcpp::DurabilityPolicy> parse_durability(const std::string & s)
   return std::nullopt;
 }
 
+// Step 11: yaml の backend 文字列 → BackendKind 変換。不正値は nullopt。
+std::optional<BackendKind> parse_backend(const std::string & s)
+{
+  if (s == "auto") {return BackendKind::Auto;}
+  if (s == "gpu") {return BackendKind::Gpu;}
+  if (s == "cpu") {return BackendKind::Cpu;}
+  return std::nullopt;
+}
+
 Eigen::Vector3d to_eigen(const std::vector<double> & vec)
 {
   Eigen::Vector3d e_vec;
@@ -138,6 +147,19 @@ bool Bbs3dNode::load_config(const std::string & config)
     get_or(conf, "localize_topic_name", "~/localize");
 
   RCLCPP_INFO(get_logger(), "Loading 3D-BBS parameters...");
+  // Step 11: 使用する実装。yaml に無ければ "auto"(GPU 実装を含むビルドなら
+  // GPU、CPU のみのビルドなら CPU)。既存ユーザの yaml は変更不要。
+  const std::string backend_str = get_or(conf, "backend", "auto");
+  auto backend = parse_backend(backend_str);
+  if (!backend) {
+    RCLCPP_ERROR(
+      get_logger(),
+      "backend must be 'auto', 'gpu' or 'cpu', got '%s'",
+      backend_str.c_str());
+    return false;
+  }
+  backend_kind = *backend;
+
   min_level_res = conf["min_level_res"].as<double>();
   max_level = conf["max_level"].as<int>();
 
@@ -206,17 +228,17 @@ void Bbs3dNode::load_target_clouds_pcd()
   points_msg->header.stamp = this->now();
   tar_points_pub_->publish(*points_msg);
 
-  std::vector<Eigen::Vector3f> tar_points;
+  std::vector<Eigen::Vector3d> tar_points;
   pciof::pcl_to_eigen(tar_cloud_ptr, tar_points);
   broadcast_viewer_frame(tar_points);
 
   // 階層 voxelmap 構築。tar_path 配下に保存済みの coords ファイルがあればそれを読む。
   RCLCPP_INFO(get_logger(), "Creating hierarchical voxel map...");
-  if (gpu_bbs3d.set_voxelmaps_coords(abs_path)) {
+  if (bbs3d_->set_voxelmaps_coords(abs_path)) {
     RCLCPP_INFO(get_logger(), "Loaded voxelmaps coords directly");
   } else {
-    gpu_bbs3d.set_tar_points(tar_points, min_level_res, max_level);
-    gpu_bbs3d.set_trans_search_range(tar_points);
+    bbs3d_->set_tar_points(tar_points, min_level_res, max_level);
+    bbs3d_->set_trans_search_range(tar_points);
   }
 }
 
@@ -249,7 +271,7 @@ void Bbs3dNode::target_cloud_callback(
     tar_cloud_ptr = filtered;
   }
 
-  std::vector<Eigen::Vector3f> tar_points;
+  std::vector<Eigen::Vector3d> tar_points;
   pciof::pcl_to_eigen(tar_cloud_ptr, tar_points);
   if (tar_points.empty()) {
     RCLCPP_WARN(
@@ -257,8 +279,8 @@ void Bbs3dNode::target_cloud_callback(
       "Received target cloud is empty after downsample, ignoring");
     return;
   }
-  gpu_bbs3d.set_tar_points(tar_points, min_level_res, max_level);
-  gpu_bbs3d.set_trans_search_range(tar_points);
+  bbs3d_->set_tar_points(tar_points, min_level_res, max_level);
+  bbs3d_->set_trans_search_range(tar_points);
   tar_points_loaded_ = true;
 
   const auto build_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -291,6 +313,18 @@ Bbs3dNode::Bbs3dNode(const rclcpp::NodeOptions & options)
     RCLCPP_ERROR(get_logger(), "Loading config file failed");
     throw std::runtime_error("config load failed");
   }
+
+  // Step 11: yaml の backend 指定に従って BBS3D 実装を生成する。
+  // load_target_clouds_pcd が bbs3d_ を触るため、必ずその前に生成する。
+  bbs3d_ = create_backend(backend_kind);
+  if (!bbs3d_) {
+    RCLCPP_ERROR(
+      get_logger(),
+      "backend: 'gpu' was requested but this build has no GPU support. "
+      "Rebuild where CUDA and libgpu_bbs3d.so are available, or set backend: 'cpu'.");
+    throw std::runtime_error("gpu backend unavailable");
+  }
+  RCLCPP_INFO(get_logger(), "3D-BBS backend: %s", bbs3d_->name());
 
   localize_sub_ = this->create_subscription<std_msgs::msg::Bool>(
     localize_topic_name,
@@ -340,11 +374,11 @@ Bbs3dNode::Bbs3dNode(const rclcpp::NodeOptions & options)
       target_cloud_topic_name.c_str());
   }
 
-  gpu_bbs3d.set_angular_search_range(min_rpy.cast<float>(), max_rpy.cast<float>());
-  gpu_bbs3d.set_score_threshold_percentage(static_cast<float>(score_threshold_percentage));
+  bbs3d_->set_angular_search_range(min_rpy, max_rpy);
+  bbs3d_->set_score_threshold_percentage(score_threshold_percentage);
   if (timeout_msec > 0) {
-    gpu_bbs3d.enable_timeout();
-    gpu_bbs3d.set_timeout_duration_in_msec(timeout_msec);
+    bbs3d_->enable_timeout();
+    bbs3d_->set_timeout_duration_in_msec(timeout_msec);
   }
 
   RCLCPP_INFO(get_logger(), "[ROS2] 3D-BBS initialized");
@@ -352,15 +386,15 @@ Bbs3dNode::Bbs3dNode(const rclcpp::NodeOptions & options)
 
 Bbs3dNode::~Bbs3dNode() = default;
 
-void Bbs3dNode::broadcast_viewer_frame(const std::vector<Eigen::Vector3f> & points)
+void Bbs3dNode::broadcast_viewer_frame(const std::vector<Eigen::Vector3d> & points)
 {
-  Eigen::Vector3d inv_vec = -points[0].cast<double>();
+  Eigen::Vector3d inv_vec = -points[0];
   Eigen::Vector3d centroid = Eigen::Vector3d::Zero();
   for (const auto & point : points) {
-    centroid += (point.cast<double>() + inv_vec);
+    centroid += (point + inv_vec);
   }
   centroid /= points.size();
-  centroid += points[0].cast<double>();
+  centroid += points[0];
 
   RCLCPP_INFO(
     get_logger(),
@@ -386,9 +420,9 @@ void Bbs3dNode::broadcast_viewer_frame(const std::vector<Eigen::Vector3f> & poin
 // 失敗時は LocalizeResult.message に正規化された reason 文字列を載せて返す。
 Bbs3dNode::LocalizeResult Bbs3dNode::run_localization()
 {
-  // Step 10: gpu_bbs3d への全アクセスを排他。target_cloud_callback が再構築中なら
+  // Step 10: BBS3D バックエンドへの全アクセスを排他。target_cloud_callback が再構築中なら
   // lock_guard で再構築完了まで block で待つ(API は「localize 呼出は再構築完了まで
-  // 待つ」というシンプルな約束に統一)。取得後は関数末尾まで保持され、gpu_bbs3d.localize()
+  // 待つ」というシンプルな約束に統一)。取得後は関数末尾まで保持され、bbs3d_->localize()
   // 実行中も lock 中(= set_tar_points と並行しない)。
   std::lock_guard<std::mutex> bbs3d_lock(bbs3d_mutex_);
   if (!tar_points_loaded_) {
@@ -471,15 +505,15 @@ Bbs3dNode::LocalizeResult Bbs3dNode::run_localization()
   pcl::transformPointCloud(
     *src_cloud, *src_cloud, pciof::calc_gravity_alignment_matrix(acc.cast<float>()));
 
-  std::vector<Eigen::Vector3f> src_points;
+  std::vector<Eigen::Vector3d> src_points;
   pciof::pcl_to_eigen(src_cloud, src_points);
-  gpu_bbs3d.set_src_points(src_points);
+  bbs3d_->set_src_points(src_points);
 
   RCLCPP_INFO(get_logger(), "Localize: start");
-  gpu_bbs3d.localize();
+  bbs3d_->localize();
 
-  if (!gpu_bbs3d.has_localized()) {
-    if (gpu_bbs3d.has_timed_out()) {
+  if (!bbs3d_->has_localized()) {
+    if (bbs3d_->has_timed_out()) {
       return {false, "localization timed out"};
     }
     return {false, "score below threshold"};
@@ -488,11 +522,11 @@ Bbs3dNode::LocalizeResult Bbs3dNode::run_localization()
   RCLCPP_INFO(
     get_logger(),
     "Localize: success (score=%d, time=%.1f ms)",
-    gpu_bbs3d.get_best_score(), gpu_bbs3d.get_elapsed_time());
+    bbs3d_->get_best_score(), bbs3d_->get_elapsed_time());
 
   publish_results(
-    cloud_msg->header, src_cloud, gpu_bbs3d.get_global_pose(),
-    gpu_bbs3d.get_best_score(), gpu_bbs3d.get_elapsed_time());
+    cloud_msg->header, src_cloud, bbs3d_->get_global_pose().cast<float>(),
+    bbs3d_->get_best_score(), bbs3d_->get_elapsed_time());
 
   return {true, ""};
 }
