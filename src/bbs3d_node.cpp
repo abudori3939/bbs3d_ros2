@@ -121,6 +121,13 @@ CloudStats sanitize_cloud(pcl::PointCloud<pcl::PointXYZ> & cloud)
 std::optional<float> min_feasible_leaf_size(
   const Eigen::Array3f & min_p, const Eigen::Array3f & max_p, const float leaf)
 {
+  // leaf が正でないと 1/leaf の符号が反転し、d == 0 → product == 0 を経て
+  // kMaxCells / product が整数ゼロ除算 (SIGFPE) になる。呼び出し側 (load_config)
+  // でも弾いているが、ヘルパ単体でも壊れないようにしておく。
+  if (!(leaf > 0.0f)) {
+    return std::nullopt;
+  }
+
   const Eigen::Array3f extent = max_p - min_p;
   constexpr int64_t kMaxCells = std::numeric_limits<int32_t>::max();
 
@@ -328,6 +335,21 @@ bool Bbs3dNode::load_config(const std::string & config)
   RCLCPP_INFO(get_logger(), "Loading downsample parameters...");
   tar_leaf_size = conf["tar_leaf_size"].as<float>();
   src_leaf_size = conf["src_leaf_size"].as<float>();
+  // Step 13: leaf size は「0.0 で off、正の値で間引き」の仕様で負値に意味は
+  // 無い。source 側の分岐は上流由来の `!= 0.0f` なので負値も間引き経路に入り、
+  // 1/leaf が負になる分だけ下流のボクセル数計算が壊れる。ここで弾く。
+  if (tar_leaf_size < 0.0f) {
+    RCLCPP_ERROR(
+      get_logger(),
+      "tar_leaf_size must be 0.0 (off) or greater, got %g", tar_leaf_size);
+    return false;
+  }
+  if (src_leaf_size < 0.0f) {
+    RCLCPP_ERROR(
+      get_logger(),
+      "src_leaf_size must be 0.0 (off) or greater, got %g", src_leaf_size);
+    return false;
+  }
   min_scan_range = conf["min_scan_range"].as<double>();
   max_scan_range = conf["max_scan_range"].as<double>();
 

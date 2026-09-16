@@ -51,12 +51,18 @@ LIDAR_TOPIC_NAME = "/_bbs3d_ros2_test/src_nan/points"
 IMU_TOPIC_NAME = "/_bbs3d_ros2_test/src_nan/imu"
 
 NUM_FINITE_POINTS = 50
-NUM_NAN_POINTS = 3
+# (a) の全点 NaN 点群と (b) の混在点群で **NaN の数を変える**。同数にすると
+# (a) が出す "Dropped N ..." の 1 行で (b) の assert も満たされてしまい、
+# (b) の点群が届いていなくても PASS する偽 GREEN になる。
+NUM_NAN_POINTS_ALL_NAN = 2
+NUM_NAN_POINTS_MIXED = 3
 EXPECTED_NO_FINITE_MESSAGE = "source cloud has no finite points"
-EXPECTED_DROPPED_SUBSTRING = (
-    f"Dropped {NUM_NAN_POINTS} non-finite points"
+# 部分一致を複数本に分けると target 側の WARN でも満たせてしまうため、
+# 1 本の完全な文字列で待つ。
+EXPECTED_DROPPED_LOG = (
+    f"Dropped {NUM_NAN_POINTS_MIXED} non-finite points from the received "
+    "source cloud"
 )
-EXPECTED_DROPPED_DETAIL = "source cloud"
 EXPECTED_REBUILT_SUBSTRING = "Target voxelmap rebuilt"
 
 DISCOVERY_TIMEOUT_SEC = 20.0
@@ -119,8 +125,8 @@ def _make_target_cloud() -> PointCloud2:
 
 
 def _make_all_nan_cloud() -> PointCloud2:
-    points = [(math.nan, 0.0, 0.0), (0.0, math.nan, 0.0),
-              (0.0, 0.0, math.nan)]
+    points = [(math.nan, 0.0, 0.0), (0.0, math.nan, 0.0)]
+    assert len(points) == NUM_NAN_POINTS_ALL_NAN
     header = Header()
     header.frame_id = "map"
     return point_cloud2.create_cloud_xyz32(header, points)
@@ -129,8 +135,10 @@ def _make_all_nan_cloud() -> PointCloud2:
 def _make_mixed_cloud() -> PointCloud2:
     points = [(float(i), float(i) * 0.1, 0.0)
               for i in range(NUM_FINITE_POINTS)]
-    points += [(math.nan, 0.0, 0.0), (0.0, math.nan, 0.0),
-               (0.0, 0.0, math.nan)]
+    nan_points = [(math.nan, 0.0, 0.0), (0.0, math.nan, 0.0),
+                  (0.0, 0.0, math.nan)]
+    assert len(nan_points) == NUM_NAN_POINTS_MIXED
+    points += nan_points
     header = Header()
     header.frame_id = "map"
     return point_cloud2.create_cloud_xyz32(header, points)
@@ -249,14 +257,20 @@ class TestSourceCloudWithNaN(unittest.TestCase):
         )
 
         # (b) 有限点と混在: 落とした点数を WARN で知らせること。
+        # (a) と NaN の数が違うので、(b) の点群が実際に処理されない限り
+        # EXPECTED_DROPPED_LOG は出ない。
         self.src_pub.publish(_make_mixed_cloud())
         self._spin_for(SETTLE_SEC)
-        self._call_localize(client)
+        response_mixed = self._call_localize(client)
+        # 混在点群では有限点が残るので、(a) の reason には**ならない**こと。
+        self.assertNotEqual(
+            response_mixed.message, EXPECTED_NO_FINITE_MESSAGE,
+            "Mixed cloud must keep its finite points, but the node reported "
+            f"{EXPECTED_NO_FINITE_MESSAGE!r} (the mixed cloud was probably "
+            "never delivered)",
+        )
         proc_output.assertWaitFor(
-            EXPECTED_DROPPED_SUBSTRING, process=node,
-            timeout=LOG_WAIT_TIMEOUT_SEC)
-        proc_output.assertWaitFor(
-            EXPECTED_DROPPED_DETAIL, process=node,
+            EXPECTED_DROPPED_LOG, process=node,
             timeout=LOG_WAIT_TIMEOUT_SEC)
 
 

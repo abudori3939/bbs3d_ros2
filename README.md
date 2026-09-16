@@ -319,8 +319,12 @@ CPU 実装は GPU 実装より大幅に遅いため、実用速度が必要な�
 | 起動時に `error while loading shared libraries: libcpu_bbs3d.so` | `sudo ldconfig` が未実行(`/usr/local/lib` が ld キャッシュに入っていない)|
 | GPU 機なのに `GPU backend = OFF` になる | 本家を `-DBUILD_CUDA=OFF` でビルドした、または CUDA が見つからない。`/usr/local/lib/libgpu_bbs3d.so` と `nvcc` を確認 |
 | 起動時に `backend: 'gpu' was requested but this build has no GPU support` | CPU のみでビルドしたパッケージに `backend: "gpu"` を指定している。`"auto"` / `"cpu"` にするか、GPU 環境でビルドし直す |
-| topic モードで `tar_leaf_size ... is too small for this map` の WARN が出る | `tar_leaf_size` が小さすぎて `pcl::VoxelGrid` のボクセル数が int32 を超えている。このとき PCL は**間引きをスキップして全点をそのまま通す**(空にはならない)ため、意図せず巨大な voxelmap が作られる。WARN が示す値以上に `tar_leaf_size` を上げること。実測(9,238,897 点 / 404 x 430 x 70 m の地図): `0.1` → 間引かれず 9,238,897 点・構築 4.4 s、`0.5` → 982,869 点・構築 1.7 s |
-| topic モードで `Dropped N non-finite points` が出る | 受信した target 点群に NaN/Inf が含まれていた。ノードが自動で除去するので対処は不要(送信側の点群を見直す手がかりとして出している)|
+| **target**: `tar_leaf_size ... is too small for this map` の WARN が出る(topic モード)| `tar_leaf_size` が小さすぎて `pcl::VoxelGrid` のボクセル数が int32 を超えている。このとき PCL は**間引きをスキップして全点をそのまま通す**(空にはならない)ため、意図せず巨大な voxelmap が作られる。WARN が示す値以上に `tar_leaf_size` を上げること。実測(9,238,897 点 / 404 x 430 x 70 m の地図): `0.1` → 間引かれず 9,238,897 点・構築 4.4 s、`0.5` → 982,869 点・構築 1.7 s |
+| **target**: `Dropped N non-finite points from the received target cloud` が出る(topic モード)| 受信した target 点群に NaN/Inf が含まれていた。ノードが自動で除去するので対処は不要(送信側の点群を見直す手がかりとして出している)|
+| **source**: `src_leaf_size ... is too small for this cloud` の WARN が出る | **上の target 行とは別物**。`src_leaf_size` が小さすぎて `pcl::VoxelGrid` のボクセル数が int32 を超え、PCL が**間引きをスキップして全点を通している**。source 点群が大きい構成(地図同士の位置合わせなど)で localize 1 回ごとに出る。`tar_leaf_size` ではなく **`src_leaf_size`** を WARN が示す値以上に上げること(間引かれないまま候補変換ごとに O(N_src) のスコア計算が走るため、CPU では実質終わらなくなる)|
+| **source**: `Dropped N non-finite points from the received source cloud` が出る | 受信した source 点群に NaN/Inf が含まれていた。ノードが自動で除去するので対処は不要。全点が非有限なら `~/localize` が `"source cloud has no finite points"` を返す |
+| `~/localize` が `"source cloud is empty after filtering"` を返す | `src_leaf_size` の間引きと `min/max_scan_range` のクロップで 1 点も残らなかった。クロップは **source の原点 (0,0,0) からの距離**で切るため、既定の `max_scan_range: 100.0` のまま地図規模の点群を source に流すと全点が消える。両方 `0.0` にしてクロップを無効化する |
+| 起動時に `src_leaf_size must be 0.0 (off) or greater` で終了する | `src_leaf_size` / `tar_leaf_size` に負値を書いている。間引きを止めたい場合は `0.0` にする |
 | 自前地図で推定精度が出ない(pcd モード)| pcd モードは上流 `pciof::load_tar_clouds` 経由で `pcl::ApproximateVoxelGrid` を使うが、作者が [3d_bbs#38](https://github.com/KOKIAOKI/3d_bbs/issues/38) で「target 点群への ApproximateVoxelGrid は位置推定に悪影響」と報告している(配布テストデータは downsample 済みのため影響なし)。自前地図では `tar_leaf_size: 0.0` にして**事前に `voxel_grid` で間引いた PCD** を置くか、`pcl::VoxelGrid` を使う topic モードを選ぶ |
 | CPU で 1 回の推定が非常に遅い | CPU 実装は GPU の数十倍遅い。`src_leaf_size` を大きくする / `max_scan_range` を絞る / `timeout_msec` を設定する |
 | `submodule update` 後に動作不安定 | 上流ヘッダだけ新しくなりライブラリが古いまま。Step 2 を再実行 |

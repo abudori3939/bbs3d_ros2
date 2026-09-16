@@ -307,8 +307,14 @@ Step 11 マージ後、topic のみの運用(`pcl_ros pcd_to_pointcloud` + CPU �
   - `test/test_src_cloud_leaf_warning.py` — 3 軸 2000 m の 4 点 + `src_leaf_size: 0.001` で WARN が出ること。
   - `test/test_cpu_num_threads.py` — `cpu_num_threads: 3` で起動ログが `3D-BBS backend: CPU (num_threads=3)` になること。
 - [x] ドキュメント: README(設定表 3 行、source QoS と `cpu_num_threads` の使い方、Service reason の追加、起動ログの表記)、`config/bbs3d_ros2.yaml`(Optional セクションにコメントアウトで追記)。
+- [x] **PR #14 レビュー対応**(独立レビューエージェントによる指摘):
+  - **負の leaf size でノードが SIGFPE 即死する経路を塞いだ**。source 側の分岐は上流由来の `if (src_leaf_size != 0.0f)` で負値も通るのに対し target 側は `> 0.0f` でガードされており、Step 13 で source から `min_feasible_leaf_size()` に負値が届くようになっていた。`1/leaf < 0` → 1 軸目で `d == 0` → `product == 0` → 2 軸目の `kMaxCells / product` で整数ゼロ除算(切り出して再現、`exit=136`)。`load_config` で `tar_leaf_size` / `src_leaf_size` の負値を ERROR + 起動失敗にし、ヘルパ冒頭にも `if (!(leaf > 0.0f)) return nullopt;` を置いた。TDD(RED: 負値 yaml で起動してしまい exit 0 → GREEN)。テスト `test/test_negative_leaf_size.py`。
+  - **`test_src_cloud_nan.py` の (b) が偽 GREEN だったのを修正**。全点 NaN 点群(a)と混在点群(b)の NaN 数が同じ 3 点だったため、(a) が出す `Dropped 3 non-finite points` の 1 行で (b) の assert も満たされ、**(b) の点群が届かなくても PASS** していた。(a) を 2 点に変えて数を分け、期待文字列を完全形にし、(b) では response も assert するようにした。
+  - **`test_src_cloud_leaf_warning.py` の assert を完全一致に**。`"src_leaf_size"` と `"too small"` を別々に待つと、後者は target 側 WARN でも満たせるため fixture 次第で偽 GREEN 化する。`src_leaf_size 0.001 is too small for this cloud` の 1 本で待つ。
+  - **README のトラブルシューティングに source 側の行を追加**。`... is too small for this map`(target)と `... for this cloud`(source)、`Dropped N ... target cloud` と `... source cloud` は見た目が近く原因が別なので、行頭に **target** / **source** を明示し、`"source cloud is empty after filtering"` と負値 ERROR の行も足した。
 - [ ] **未対応(将来 follow-up)**:
   - `test_backend_invalid_value.py` が全体実行時にまれに `exited with code -2`(SIGINT)で落ちる。ノードが exit 1 する前に launch_testing の shutdown が届くレースで、Step 13 の変更とは無関係の既存 flake。
+  - PR #14 レビューの Should fix 残(本 PR では未対応): `std::optional<int> set_num_threads` の戻り値は引数のエコーで `bool` と情報量が同じ(上流 `cpu::BBS3D` に getter が無いため「実際に適用されたか」は保証できない)。`cpu_num_threads < 1` と `src_cloud_qos_*` の不正値は ERROR + 起動失敗の仕様だが launch テストが無い(`test_target_qos_config.py` の不正値も同様なのでまとめて 1 PR)。
 - DoD: source に地図規模 / latch publish の点群を与えても、QoS で受け取れて、NaN と leaf size 過小がログから分かる ✅(launch テスト 14/14 PASS)。
 
 ---

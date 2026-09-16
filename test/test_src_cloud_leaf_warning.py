@@ -49,8 +49,12 @@ IMU_TOPIC_NAME = "/_bbs3d_ros2_test/src_leaf/imu"
 
 TOO_SMALL_LEAF = 0.001
 SPAN_M = 2000.0
-EXPECTED_WARN_SUBSTRING = "src_leaf_size"
-EXPECTED_WARN_DETAIL = "too small"
+# 部分一致を "src_leaf_size" と "too small" に分けると、後者は target 側の
+# "tar_leaf_size ... is too small for this map ..." でも満たせてしまう。
+# fixture が変わったときに黙って偽 GREEN 化しないよう、1 本の完全な文字列で待つ。
+EXPECTED_WARN_LOG = (
+    f"src_leaf_size {TOO_SMALL_LEAF:g} is too small for this cloud"
+)
 EXPECTED_REBUILT_SUBSTRING = "Target voxelmap rebuilt"
 
 DISCOVERY_TIMEOUT_SEC = 20.0
@@ -218,10 +222,7 @@ class TestSrcLeafSizeTooSmallWarning(unittest.TestCase):
         self.assertIsNotNone(future.result(), "Service did not respond")
 
         proc_output.assertWaitFor(
-            EXPECTED_WARN_SUBSTRING, process=node,
-            timeout=LOG_WAIT_TIMEOUT_SEC)
-        proc_output.assertWaitFor(
-            EXPECTED_WARN_DETAIL, process=node,
+            EXPECTED_WARN_LOG, process=node,
             timeout=LOG_WAIT_TIMEOUT_SEC)
 
 
