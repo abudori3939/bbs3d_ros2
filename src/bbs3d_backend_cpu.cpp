@@ -2,6 +2,7 @@
 #include "bbs3d_ros2/bbs3d_backend.hpp"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -56,6 +57,12 @@ public:
   void set_timeout_duration_in_msec(int msec) override
   {
     bbs3d_.set_timeout_duration_in_msec(msec);
+  }
+
+  std::optional<int> set_num_threads(int num_threads) override
+  {
+    bbs3d_.set_num_threads(num_threads);
+    return num_threads;
   }
 
   void localize() override {bbs3d_.localize();}

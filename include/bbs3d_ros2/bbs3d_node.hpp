@@ -133,6 +133,8 @@ private:
   // Step 11: 使用する BBS3D 実装。"auto" は GPU 実装を含むビルドなら GPU、
   // CPU のみのビルドなら CPU。
   BackendKind backend_kind;
+  // Step 13: CPU 実装のスレッド数(GPU 実装には該当 API が無く無視される)。
+  int cpu_num_threads;
   // Step 10: target 点群の入手元。"pcd" は起動時に target_clouds パスから PCD ロード、
   // "topic" は target_cloud_topic_name を subscribe。
   std::string target_source_mode;
@@ -142,6 +144,11 @@ private:
   // publisher (volatile) と接続するために導入。
   rclcpp::ReliabilityPolicy target_cloud_qos_reliability_;
   rclcpp::DurabilityPolicy target_cloud_qos_durability_;
+  // Step 13: source (lidar) sub の QoS も同じ 2 軸で切替可能にする。default は
+  // 上流互換の best_effort + volatile。transient_local で一発 publish される
+  // 点群を受けたい場合に yaml で変更する。depth は KeepLast(50) 固定。
+  rclcpp::ReliabilityPolicy src_cloud_qos_reliability_;
+  rclcpp::DurabilityPolicy src_cloud_qos_durability_;
   double min_level_res;
   int max_level;
   Eigen::Vector3d min_rpy;

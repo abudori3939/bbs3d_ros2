@@ -73,3 +73,16 @@ timeout_msec: 0 # off: 0
 ## REP-2003 非準拠の publisher(volatile)と接続する場合は yaml で切替える。
 # target_cloud_qos_reliability: "reliable"          # "reliable" | "best_effort"
 # target_cloud_qos_durability:  "transient_local"   # "transient_local" | "volatile"
+
+## Source cloud QoS (Step 13)
+## default は上流互換の "best_effort" + "volatile"(depth は KeepLast(50) 固定)。
+## transient_local な publisher が起動前に一発だけ流す点群を受けたい場合は
+## "reliable" + "transient_local" にする(volatile な sub には latch 済みの
+## サンプルが配送されないため)。
+# src_cloud_qos_reliability: "best_effort"   # "reliable" | "best_effort"
+# src_cloud_qos_durability:  "volatile"      # "transient_local" | "volatile"
+
+## CPU 実装のスレッド数 (Step 13)
+## backend が CPU のときだけ効く(GPU 実装に該当 API は無い)。default は
+## 上流 cpu::BBS3D の既定と同じ 4。起動ログに (num_threads=N) として出る。
+# cpu_num_threads: 4

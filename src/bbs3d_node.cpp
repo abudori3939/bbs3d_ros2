@@ -47,6 +47,12 @@ std::string get_or(
   return n[key] ? n[key].as<std::string>() : def;
 }
 
+// Step 13: int 版。cpu_num_threads を optional に読むために追加。
+int get_or(const YAML::Node & n, const std::string & key, const int def)
+{
+  return n[key] ? n[key].as<int>() : def;
+}
+
 // Step 10 follow-up: yaml の QoS 文字列 → rclcpp enum 変換。不正値は nullopt。
 std::optional<rclcpp::ReliabilityPolicy> parse_reliability(const std::string & s)
 {
@@ -230,6 +236,33 @@ bool Bbs3dNode::load_config(const std::string & config)
   target_cloud_qos_reliability_ = *reliability;
   target_cloud_qos_durability_ = *durability;
 
+  // Step 13: source (lidar) sub の QoS も同じ 2 軸で切替可能にする。default は
+  // 上流互換の best_effort + volatile のため既存ユーザに影響しない。volatile な
+  // sub には transient_local publisher の latch 済みサンプルが配送されないので、
+  // 起動前に一発 publish される点群を受けたい場合はここを変更する。
+  const std::string src_reliability_str =
+    get_or(conf, "src_cloud_qos_reliability", "best_effort");
+  const std::string src_durability_str =
+    get_or(conf, "src_cloud_qos_durability", "volatile");
+  auto src_reliability = parse_reliability(src_reliability_str);
+  auto src_durability = parse_durability(src_durability_str);
+  if (!src_reliability) {
+    RCLCPP_ERROR(
+      get_logger(),
+      "src_cloud_qos_reliability must be 'reliable' or 'best_effort', got '%s'",
+      src_reliability_str.c_str());
+    return false;
+  }
+  if (!src_durability) {
+    RCLCPP_ERROR(
+      get_logger(),
+      "src_cloud_qos_durability must be 'transient_local' or 'volatile', got '%s'",
+      src_durability_str.c_str());
+    return false;
+  }
+  src_cloud_qos_reliability_ = *src_reliability;
+  src_cloud_qos_durability_ = *src_durability;
+
   RCLCPP_INFO(get_logger(), "Loading topic name...");
   lidar_topic_name = conf["lidar_topic_name"].as<std::string>();
   imu_topic_name = conf["imu_topic_name"].as<std::string>();
@@ -259,6 +292,16 @@ bool Bbs3dNode::load_config(const std::string & config)
     return false;
   }
   backend_kind = *backend;
+
+  // Step 13: CPU 実装のスレッド数。上流 cpu::BBS3D の既定と同じ 4 を default に
+  // する(GPU 実装には該当 API が無いため無視される)。
+  cpu_num_threads = get_or(conf, "cpu_num_threads", 4);
+  if (cpu_num_threads < 1) {
+    RCLCPP_ERROR(
+      get_logger(),
+      "cpu_num_threads must be 1 or greater, got %d", cpu_num_threads);
+    return false;
+  }
 
   min_level_res = conf["min_level_res"].as<double>();
   max_level = conf["max_level"].as<int>();
@@ -454,7 +497,16 @@ Bbs3dNode::Bbs3dNode(const rclcpp::NodeOptions & options)
       "Rebuild where CUDA and libgpu_bbs3d.so are available, or set backend: 'cpu'.");
     throw std::runtime_error("gpu backend unavailable");
   }
-  RCLCPP_INFO(get_logger(), "3D-BBS backend: %s", bbs3d_->name());
+  // Step 13: スレッド数を持つ実装(CPU)なら適用値をログに含める。持たない
+  // 実装(GPU)は nullopt を返すので従来どおりの 1 行になる。
+  const auto applied_num_threads = bbs3d_->set_num_threads(cpu_num_threads);
+  if (applied_num_threads) {
+    RCLCPP_INFO(
+      get_logger(), "3D-BBS backend: %s (num_threads=%d)",
+      bbs3d_->name(), *applied_num_threads);
+  } else {
+    RCLCPP_INFO(get_logger(), "3D-BBS backend: %s", bbs3d_->name());
+  }
 
   localize_sub_ = this->create_subscription<std_msgs::msg::Bool>(
     localize_topic_name,
@@ -467,9 +519,13 @@ Bbs3dNode::Bbs3dNode(const rclcpp::NodeOptions & options)
       &Bbs3dNode::localize_srv_callback, this,
       std::placeholders::_1, std::placeholders::_2));
 
+  // Step 13: depth は上流互換の KeepLast(50) 固定、reliability / durability だけ
+  // yaml で切替える(default は best_effort + volatile = 従来と同じ)。
+  rclcpp::QoS src_qos(rclcpp::KeepLast(50));
+  src_qos.reliability(src_cloud_qos_reliability_);
+  src_qos.durability(src_cloud_qos_durability_);
   cloud_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-    lidar_topic_name,
-    rclcpp::QoS(rclcpp::KeepLast(50)).best_effort(),
+    lidar_topic_name, src_qos,
     std::bind(&Bbs3dNode::cloud_callback, this, std::placeholders::_1));
 
   imu_sub_ = this->create_subscription<sensor_msgs::msg::Imu>(
@@ -604,7 +660,36 @@ Bbs3dNode::LocalizeResult Bbs3dNode::run_localization()
   pcl::PointCloud<pcl::PointXYZ>::Ptr src_cloud(new pcl::PointCloud<pcl::PointXYZ>);
   pcl::fromROSMsg(*cloud_msg, *src_cloud);
 
+  // Step 13: target と対称に、非有限点を落としてから downsample する。
+  // 残すと BBS3D のスコア計算と publish する点群に NaN が混ざる。bbox は
+  // ここで一緒に求めて leaf size の診断に使う。
+  const CloudStats stats = sanitize_cloud(*src_cloud);
+  if (stats.dropped > 0) {
+    RCLCPP_WARN(
+      get_logger(),
+      "Dropped %zu non-finite points from the received source cloud",
+      stats.dropped);
+  }
+  if (src_cloud->empty()) {
+    return {false, "source cloud has no finite points"};
+  }
+
   if (src_leaf_size != 0.0f) {
+    // Step 13: leaf size が小さすぎると pcl::VoxelGrid はボクセル数が int32 を
+    // 超える旨を PCL_WARN(stderr 直書き)に出して **入力を素通しする**。
+    // 間引かれないまま候補変換ごとに O(N_src) のスコア計算が走るため、
+    // ノード側でも診断を出す(target 側と同じ扱い)。
+    const auto suggestion =
+      min_feasible_leaf_size(stats.min_p, stats.max_p, src_leaf_size);
+    if (suggestion) {
+      const Eigen::Array3f extent = stats.max_p - stats.min_p;
+      RCLCPP_WARN(
+        get_logger(),
+        "src_leaf_size %g is too small for this cloud (%.0f x %.0f x %.0f m): "
+        "PCL skips the downsample and the full cloud is used. "
+        "Use %g or larger.",
+        src_leaf_size, extent[0], extent[1], extent[2], *suggestion);
+    }
     pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud_ptr(new pcl::PointCloud<pcl::PointXYZ>());
     pcl::VoxelGrid<pcl::PointXYZ> filter;
     filter.setLeafSize(src_leaf_size, src_leaf_size, src_leaf_size);
@@ -624,6 +709,12 @@ Bbs3dNode::LocalizeResult Bbs3dNode::run_localization()
       }
     }
     *src_cloud = *cut_cloud_ptr;
+  }
+
+  // Step 13: downsample / crop の結果 1 点も残らなかった場合。空の点群を
+  // 渡すと score threshold が 0 になり、BBS3D が意味のない解を返しうる。
+  if (src_cloud->empty()) {
+    return {false, "source cloud is empty after filtering"};
   }
 
   int imu_index = get_nearest_imu_index(imu_snapshot, cloud_msg->header.stamp);
