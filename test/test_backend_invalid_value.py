@@ -19,6 +19,7 @@ import launch
 import launch_ros.actions
 import launch_testing
 import launch_testing.actions
+import launch_testing.markers
 import launch_testing.asserts
 import pytest
 
@@ -30,9 +31,11 @@ TARGET_TOPIC_NAME = "/_bbs3d_ros2_test/backend_invalid_target"
 INVALID_BACKEND = "tpu"
 EXPECTED_ERROR_SUBSTRING = "backend must be"
 LOG_WAIT_TIMEOUT_SEC = 15.0
+SHUTDOWN_WAIT_TIMEOUT_SEC = 10.0
 
 
 @pytest.mark.launch_test
+@launch_testing.markers.keep_alive
 def generate_test_description():
     text = FIXTURE_YAML.read_text().replace(
         "__TARGET_CLOUD_TOPIC__", TARGET_TOPIC_NAME
@@ -56,12 +59,20 @@ def generate_test_description():
 
 
 class TestInvalidBackendErrorLog(unittest.TestCase):
-    def test_error_log_appears(self, proc_output, node, tmp_yaml):
+    def test_error_log_appears(self, proc_output, proc_info, node, tmp_yaml):
         proc_output.assertWaitFor(
             EXPECTED_ERROR_SUBSTRING,
             process=node,
             timeout=LOG_WAIT_TIMEOUT_SEC,
         )
+        # ノードが自分で exit 1 するまで待ってから抜ける。ERROR を見た直後に
+        # 抜けると、launch_testing の shutdown(SIGINT)が自発終了より先に
+        # 届いて exit code が -2 になることがある。待つ間にプロセスが終了しても
+        # launch が止まらないよう、generate_test_description に keep_alive を
+        # 付けている(付けないと "Processes under test stopped before tests
+        # completed" で落ちる)。
+        proc_info.assertWaitForShutdown(
+            process=node, timeout=SHUTDOWN_WAIT_TIMEOUT_SEC)
 
 
 @launch_testing.post_shutdown_test()

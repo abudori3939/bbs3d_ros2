@@ -20,6 +20,7 @@ import launch
 import launch_ros.actions
 import launch_testing
 import launch_testing.actions
+import launch_testing.markers
 import launch_testing.asserts
 import pytest
 
@@ -39,6 +40,7 @@ def _make_guaranteed_nonexistent_path():
 
 
 @pytest.mark.launch_test
+@launch_testing.markers.keep_alive
 def generate_test_description():
     bad_path = _make_guaranteed_nonexistent_path()
     text = FIXTURE_YAML.read_text().replace("__TARGET_CLOUDS_PATH__", bad_path)
@@ -60,7 +62,7 @@ def generate_test_description():
 
 
 class TestErrorLogAppears(unittest.TestCase):
-    def test_error_log_appears(self, proc_output, node, tmp_yaml):
+    def test_error_log_appears(self, proc_output, proc_info, node, tmp_yaml):
         # Active test として ERROR ログを待つことで、process が constructor を
         # 走り終わる時間を稼ぐ。これがないと launch_testing が active テスト
         # 0 件で即 SIGINT を送り、process がコンストラクタ実行中に死ぬ。
@@ -69,6 +71,13 @@ class TestErrorLogAppears(unittest.TestCase):
             process=node,
             timeout=15.0,
         )
+        # ノードが自分で exit 1 するまで待ってから抜ける。ERROR を見た直後に
+        # 抜けると、launch_testing の shutdown(SIGINT)が自発終了より先に
+        # 届いて exit code が -2 になることがある。待つ間にプロセスが終了しても
+        # launch が止まらないよう、generate_test_description に keep_alive を
+        # 付けている(付けないと "Processes under test stopped before tests
+        # completed" で落ちる)。
+        proc_info.assertWaitForShutdown(process=node, timeout=10.0)
 
 
 @launch_testing.post_shutdown_test()
