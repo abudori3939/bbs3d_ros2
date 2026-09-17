@@ -2,6 +2,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -47,6 +48,15 @@ public:
   virtual void set_score_threshold_percentage(double percentage) = 0;
   virtual void enable_timeout() = 0;
   virtual void set_timeout_duration_in_msec(int msec) = 0;
+
+  // Step 13: スレッド数を持つのは CPU 実装だけ(GPU 実装に該当 API は無い)。
+  // 適用した実装は実際の値を返し、持たない実装は nullopt を返す。呼び出し側は
+  // 戻り値で「設定が効いたか」を判断してログに出す。
+  virtual std::optional<int> set_num_threads(int num_threads)
+  {
+    (void)num_threads;
+    return std::nullopt;
+  }
 
   virtual void localize() = 0;
 
