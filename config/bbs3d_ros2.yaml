@@ -85,4 +85,5 @@ timeout_msec: 0 # off: 0
 ## CPU 実装のスレッド数 (Step 13)
 ## backend が CPU のときだけ効く(GPU 実装に該当 API は無い)。default は
 ## 上流 cpu::BBS3D の既定と同じ 4。起動ログに (num_threads=N) として出る。
+## マシンのハードウェアスレッド数を超えると WARN(起動は続ける)。
 # cpu_num_threads: 4

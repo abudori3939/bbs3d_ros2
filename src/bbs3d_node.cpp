@@ -38,6 +38,13 @@ namespace
 // トリガー受信時に lidar / imu の最終受信時刻が古ければ WARN を出す閾値。
 constexpr double STALE_THRESHOLD_SEC = 3.0;
 
+// cpu_num_threads の既定値。上流 cpu::BBS3D の ctor の num_threads_(4) と同じ。
+constexpr int kDefaultCpuNumThreads = 4;
+
+// source 側 leaf 過小 WARN の間隔 [ms]。localize のたびに評価されるので、
+// トリガを連打したときにログが埋まらないよう間引く。
+constexpr int kSrcLeafWarnThrottleMs = 10000;
+
 // yaml に key があればその値、無ければ default を返す。Step 9 で追加した
 // optional な topic name 用。`as<std::string>()` 直書きすると key 不在で
 // YAML::TypedBadConversion を投げてしまうため、後方互換のために用意する。
@@ -48,7 +55,7 @@ std::string get_or(
 }
 
 // Step 13: int 版。cpu_num_threads を optional に読むために追加。
-int get_or(const YAML::Node & n, const std::string & key, const int def)
+int get_or(const YAML::Node & n, const std::string & key, int def)
 {
   return n[key] ? n[key].as<int>() : def;
 }
@@ -302,7 +309,7 @@ bool Bbs3dNode::load_config(const std::string & config)
 
   // Step 13: CPU 実装のスレッド数。上流 cpu::BBS3D の既定と同じ 4 を default に
   // する(GPU 実装には該当 API が無いため無視される)。
-  cpu_num_threads = get_or(conf, "cpu_num_threads", 4);
+  cpu_num_threads = get_or(conf, "cpu_num_threads", kDefaultCpuNumThreads);
   if (cpu_num_threads < 1) {
     RCLCPP_ERROR(
       get_logger(),
@@ -338,13 +345,17 @@ bool Bbs3dNode::load_config(const std::string & config)
   // Step 13: leaf size は「0.0 で off、正の値で間引き」の仕様で負値に意味は
   // 無い。source 側の分岐は上流由来の `!= 0.0f` なので負値も間引き経路に入り、
   // 1/leaf が負になる分だけ下流のボクセル数計算が壊れる。ここで弾く。
-  if (tar_leaf_size < 0.0f) {
+  // `< 0.0f` ではなく `!(x >= 0.0f)` にしているのは NaN も弾くため(NaN との
+  // 比較はすべて false)。NaN は `!= 0.0f` を通って pcl::VoxelGrid に渡り、
+  // PCL 内部で NaN → int 変換の UB が走る。inf はクラッシュしないので既存挙動
+  // のまま通す。
+  if (!(tar_leaf_size >= 0.0f)) {
     RCLCPP_ERROR(
       get_logger(),
       "tar_leaf_size must be 0.0 (off) or greater, got %g", tar_leaf_size);
     return false;
   }
-  if (src_leaf_size < 0.0f) {
+  if (!(src_leaf_size >= 0.0f)) {
     RCLCPP_ERROR(
       get_logger(),
       "src_leaf_size must be 0.0 (off) or greater, got %g", src_leaf_size);
@@ -525,8 +536,24 @@ Bbs3dNode::Bbs3dNode(const rclcpp::NodeOptions & options)
     RCLCPP_INFO(
       get_logger(), "3D-BBS backend: %s (num_threads=%d)",
       bbs3d_->name(), cpu_num_threads);
+    // コア数を超えても OpenMP はそのままスレッドを作って奪い合うだけで速く
+    // ならない。コンテナの CPU 制限などで hardware_concurrency() が実態と
+    // ずれることもあるので、起動は止めずに WARN に留める。0 は「不明」。
+    const unsigned int hw_threads = std::thread::hardware_concurrency();
+    if (hw_threads > 0 && static_cast<unsigned int>(cpu_num_threads) > hw_threads) {
+      RCLCPP_WARN(
+        get_logger(),
+        "cpu_num_threads %d exceeds the %u hardware threads of this machine; "
+        "it will not run faster than %u",
+        cpu_num_threads, hw_threads, hw_threads);
+    }
   } else {
     RCLCPP_INFO(get_logger(), "3D-BBS backend: %s", bbs3d_->name());
+    if (cpu_num_threads != kDefaultCpuNumThreads) {
+      RCLCPP_INFO(
+        get_logger(), "cpu_num_threads %d is ignored by the %s backend",
+        cpu_num_threads, bbs3d_->name());
+    }
   }
 
   localize_sub_ = this->create_subscription<std_msgs::msg::Bool>(
@@ -704,8 +731,8 @@ Bbs3dNode::LocalizeResult Bbs3dNode::run_localization()
       min_feasible_leaf_size(stats.min_p, stats.max_p, src_leaf_size);
     if (suggestion) {
       const Eigen::Array3f extent = stats.max_p - stats.min_p;
-      RCLCPP_WARN(
-        get_logger(),
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), kSrcLeafWarnThrottleMs,
         "src_leaf_size %g is too small for this cloud (%.0f x %.0f x %.0f m): "
         "PCL skips the downsample and the full cloud is used. "
         "Use %g or larger.",

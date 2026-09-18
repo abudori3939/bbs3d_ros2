@@ -8,15 +8,23 @@ exit code 1 で終了する仕様になっている。``backend`` と負の leaf
 - ``cpu_num_threads`` が 1 未満
 - ``src_cloud_qos_reliability`` / ``src_cloud_qos_durability`` の未知の文字列
 - ``target_cloud_qos_reliability`` / ``target_cloud_qos_durability`` の未知の文字列
+- ``src_leaf_size`` / ``tar_leaf_size`` の NaN(``.nan``)
 
 ``launch_testing.parametrize`` で 1 ファイルから設定ごとに起動し、各ケースで
 「ERROR ログが出る → ノードが自分で終了する → exit code 1」を確認する。
 既存の検証を守るためのテストなので、追加時点から PASS する(RED ではない)。
+ただし leaf size の NaN ケースは検証コードより先に追加した RED
+(``< 0.0f`` の比較では NaN が素通りし、ノードがそのまま起動する)。
+
+fixture に既にあるキー(leaf size など)は行ごと置換し、無いキーは末尾に
+追記する。既にあるキーを追記すると YAML のキー重複になり、どちらの値が
+読まれるかが実装依存になる(不正値が読まれずにテストの意味が無くなる)。
 
 終了待ちと ``keep_alive`` の理由は ``test_backend_invalid_value.py`` と同じ。
 topic モードの fixture を使うため PCD ファイルは不要。
 """
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -37,7 +45,7 @@ TARGET_TOPIC_NAME = "/_bbs3d_ros2_test/invalid_config_target"
 LOG_WAIT_TIMEOUT_SEC = 15.0
 SHUTDOWN_WAIT_TIMEOUT_SEC = 10.0
 
-# (yaml に追記する 1 行, 期待する ERROR ログの部分文字列)
+# (yaml に書く 1 行, 期待する ERROR ログの部分文字列)
 CASES = [
     ("cpu_num_threads: 0",
      "cpu_num_threads must be 1 or greater"),
@@ -49,6 +57,11 @@ CASES = [
      "target_cloud_qos_reliability must be"),
     ('target_cloud_qos_durability: "forever"',
      "target_cloud_qos_durability must be"),
+    # `< 0.0f` では NaN が素通りし、PCL 内部で NaN → int 変換の UB が走る。
+    ("src_leaf_size: .nan",
+     "src_leaf_size must be"),
+    ("tar_leaf_size: .nan",
+     "tar_leaf_size must be"),
 ]
 
 
@@ -59,7 +72,12 @@ def generate_test_description(invalid_line, expected_error):
     text = FIXTURE_YAML.read_text().replace(
         "__TARGET_CLOUD_TOPIC__", TARGET_TOPIC_NAME
     )
-    text += f"\n## 不正値(テスト用)\n{invalid_line}\n"
+    key = invalid_line.split(":", 1)[0]
+    key_line = re.compile(rf"^{re.escape(key)}:.*$", flags=re.MULTILINE)
+    if key_line.search(text):
+        text = key_line.sub(invalid_line, text)
+    else:
+        text += f"\n## 不正値(テスト用)\n{invalid_line}\n"
     tmp = tempfile.NamedTemporaryFile(
         mode="w", suffix=".yaml", delete=False, prefix="bbs3d_invalid_config_"
     )

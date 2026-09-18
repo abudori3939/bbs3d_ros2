@@ -187,6 +187,13 @@ src_cloud_qos_reliability: "reliable"          # default: "best_effort"
 src_cloud_qos_durability:  "transient_local"   # default: "volatile"
 ```
 
+> [!WARNING]
+> この設定は**地図など 1 回だけ publish される点群を source にする構成専用**です。
+> DDS のマッチング規則(`pub.durability >= sub.durability`)により、subscriber を `transient_local` にすると
+> **通常の LiDAR ドライバ(`volatile` で publish)とは接続されず、1 フレームも届かなくなります**。
+> また `reliable` + `KeepLast(50)` を高レートの LiDAR に付けると、受信が詰まったときに publisher 側が
+> 再送で待たされることがあります。実センサに戻すときは既定値(`best_effort` + `volatile`)に戻してください。
+
 - target 未受信状態で `~/localize` を叩くと `response.message == "target map not loaded"`
 - 再構築中(数秒)に `~/localize` を叩くと **再構築完了まで blocking で待たされた後** に通常 localize 結果が返る(クライアント側のタイムアウトは future の `wait_for` 等で制御してください)
 - 再構築完了後の localize は通常通り動作
@@ -226,7 +233,10 @@ backend: "auto"   # "auto"(既定) | "gpu" | "cpu"
 
 CPU 実装のスレッド数は `cpu_num_threads` で設定できます(既定 `4` = 本家 `cpu::BBS3D` の既定値)。
 スコア計算の OpenMP 並列数に効くため、広域地図や大きい source 点群を CPU で扱う場合は
-コア数に合わせて上げてください。GPU 実装には該当 API が無いため無視されます。
+コア数に合わせて上げてください。マシンのハードウェアスレッド数を超える値を書くと、起動は続けたまま
+`cpu_num_threads N exceeds the M hardware threads of this machine` の WARN が出ます(それ以上は速くなりません)。
+GPU 実装には該当 API が無いため無視され、既定以外の値を書いていれば起動時に
+`cpu_num_threads N is ignored by the GPU backend` の INFO が出ます。
 
 ```yaml
 cpu_num_threads: 8
@@ -306,7 +316,7 @@ CPU 実装は GPU 実装より大幅に遅いため、実用速度が必要な�
 | `target_cloud_qos_durability` | target sub の durability(既定 `"transient_local"` = REP-2003 Maps 推奨、または `"volatile"` = `pcl_ros` 等と接続用)|
 | `src_cloud_qos_reliability` | source (lidar) sub の reliability(既定 `"best_effort"`、または `"reliable"`)|
 | `src_cloud_qos_durability` | source sub の durability(既定 `"volatile"`、または `"transient_local"` = 起動前に一発だけ latch publish される点群を受けたいとき)|
-| `cpu_num_threads` | CPU 実装のスレッド数(既定 `4` = 上流既定。GPU 実装では無視)|
+| `cpu_num_threads` | CPU 実装のスレッド数(既定 `4` = 上流既定。コア数超過で WARN、GPU 実装では無視)|
 
 > Topic / Service 名は既定で `config/bbs3d_ros2.yaml` 内ではコメントアウトされています(=既定値で動く)。変更したい行の `#` を外して値を書き換えてください。
 
@@ -321,10 +331,10 @@ CPU 実装は GPU 実装より大幅に遅いため、実用速度が必要な�
 | 起動時に `backend: 'gpu' was requested but this build has no GPU support` | CPU のみでビルドしたパッケージに `backend: "gpu"` を指定している。`"auto"` / `"cpu"` にするか、GPU 環境でビルドし直す |
 | **target**: `tar_leaf_size ... is too small for this map` の WARN が出る(topic モード)| `tar_leaf_size` が小さすぎて `pcl::VoxelGrid` のボクセル数が int32 を超えている。このとき PCL は**間引きをスキップして全点をそのまま通す**(空にはならない)ため、意図せず巨大な voxelmap が作られる。WARN が示す値以上に `tar_leaf_size` を上げること。実測(9,238,897 点 / 404 x 430 x 70 m の地図): `0.1` → 間引かれず 9,238,897 点・構築 4.4 s、`0.5` → 982,869 点・構築 1.7 s |
 | **target**: `Dropped N non-finite points from the received target cloud` が出る(topic モード)| 受信した target 点群に NaN/Inf が含まれていた。ノードが自動で除去するので対処は不要(送信側の点群を見直す手がかりとして出している)|
-| **source**: `src_leaf_size ... is too small for this cloud` の WARN が出る | **上の target 行とは別物**。`src_leaf_size` が小さすぎて `pcl::VoxelGrid` のボクセル数が int32 を超え、PCL が**間引きをスキップして全点を通している**。source 点群が大きい構成(地図同士の位置合わせなど)で localize 1 回ごとに出る。`tar_leaf_size` ではなく **`src_leaf_size`** を WARN が示す値以上に上げること(間引かれないまま候補変換ごとに O(N_src) のスコア計算が走るため、CPU では実質終わらなくなる)|
+| **source**: `src_leaf_size ... is too small for this cloud` の WARN が出る | **上の target 行とは別物**。`src_leaf_size` が小さすぎて `pcl::VoxelGrid` のボクセル数が int32 を超え、PCL が**間引きをスキップして全点を通している**。source 点群が大きい構成(地図同士の位置合わせなど)で localize のたびに評価される(ログが埋まらないよう **10 秒に 1 回**に間引いている)。`tar_leaf_size` ではなく **`src_leaf_size`** を WARN が示す値以上に上げること(間引かれないまま候補変換ごとに O(N_src) のスコア計算が走るため、CPU では実質終わらなくなる)|
 | **source**: `Dropped N non-finite points from the received source cloud` が出る | 受信した source 点群に NaN/Inf が含まれていた。ノードが自動で除去するので対処は不要。全点が非有限なら `~/localize` が `"source cloud has no finite points"` を返す |
 | `~/localize` が `"source cloud is empty after filtering"` を返す | `min/max_scan_range` のクロップで 1 点も残らなかった(`src_leaf_size` の間引きは、有限点が 1 点でもあれば 0 点にはしない)。クロップは **source の原点 (0,0,0) からの距離**で切るため、既定の `max_scan_range: 100.0` のまま地図規模の点群を source に流すと全点が消える。両方 `0.0` にしてクロップを無効化する |
-| 起動時に `src_leaf_size must be 0.0 (off) or greater` / `tar_leaf_size must be 0.0 (off) or greater` で終了する | `src_leaf_size` / `tar_leaf_size` に負値を書いている。間引きを止めたい場合は `0.0` にする |
+| 起動時に `src_leaf_size must be 0.0 (off) or greater` / `tar_leaf_size must be 0.0 (off) or greater` で終了する | `src_leaf_size` / `tar_leaf_size` に負値か `.nan` を書いている。間引きを止めたい場合は `0.0` にする |
 | 自前地図で推定精度が出ない(pcd モード)| pcd モードは上流 `pciof::load_tar_clouds` 経由で `pcl::ApproximateVoxelGrid` を使うが、作者が [3d_bbs#38](https://github.com/KOKIAOKI/3d_bbs/issues/38) で「target 点群への ApproximateVoxelGrid は位置推定に悪影響」と報告している(配布テストデータは downsample 済みのため影響なし)。自前地図では `tar_leaf_size: 0.0` にして**事前に `voxel_grid` で間引いた PCD** を置くか、`pcl::VoxelGrid` を使う topic モードを選ぶ |
 | CPU で 1 回の推定が非常に遅い | CPU 実装は GPU の数十倍遅い。`src_leaf_size` を大きくする / `max_scan_range` を絞る / `timeout_msec` を設定する |
 | `submodule update` 後に動作不安定 | 上流ヘッダだけ新しくなりライブラリが古いまま。Step 2 を再実行 |
