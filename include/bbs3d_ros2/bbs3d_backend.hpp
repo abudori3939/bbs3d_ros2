@@ -2,7 +2,6 @@
 #pragma once
 
 #include <memory>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -22,8 +21,8 @@ enum class BackendKind
 
 // 上流 3d_bbs の gpu::BBS3D / cpu::BBS3D を同一インタフェースで扱うための薄い
 // ラッパ。ノードが実際に呼んでいる API だけを宣言する(上流にある
-// set_branch_copy_size / set_num_threads 等、片方にしか無く本ノードが使わない
-// ものは意図的に含めない)。
+// set_branch_copy_size 等、片方にしか無く本ノードが使わないものは意図的に
+// 含めない)。
 //
 // スカラは double に統一する。cpu::BBS3D は元々 double、gpu::BBS3D は float
 // なので、float への往復キャストは GpuBackend 側に閉じ込める。
@@ -50,12 +49,12 @@ public:
   virtual void set_timeout_duration_in_msec(int msec) = 0;
 
   // Step 13: スレッド数を持つのは CPU 実装だけ(GPU 実装に該当 API は無い)。
-  // 適用した実装は実際の値を返し、持たない実装は nullopt を返す。呼び出し側は
-  // 戻り値で「設定が効いたか」を判断してログに出す。
-  virtual std::optional<int> set_num_threads(int num_threads)
+  // スレッド数を持つ実装は設定して true、持たない実装は何もせず false を返す。
+  // 上流 cpu::BBS3D に getter が無いため、実際に反映されたかまでは返せない。
+  virtual bool set_num_threads(int num_threads)
   {
     (void)num_threads;
-    return std::nullopt;
+    return false;
   }
 
   virtual void localize() = 0;

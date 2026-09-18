@@ -7,8 +7,9 @@ Leaf size config test (異常系): 負の leaf size で clean に起動失敗す
 
 Step 13 で入れた ``min_feasible_leaf_size()`` は PCL と同じ
 ``(int64)(extent * (1/leaf)) + 1`` の積でボクセル数を見積もるため、
-``1/leaf`` が負になると 1 軸目で ``d == 0`` になり ``product`` が 0 に潰れ、
-次の軸で ``kMaxCells / product`` が **整数ゼロ除算 (SIGFPE)** を起こす。
+``1/leaf`` が負で、x 方向の広がりが ``[|leaf|, 2|leaf|)`` に入ると 1 軸目で
+``d == 0`` になり ``product`` が 0 に潰れ、次の軸で ``kMaxCells / product`` が
+**整数ゼロ除算 (SIGFPE)** を起こす。
 ``~/localize`` を叩いた瞬間にプロセスが落ち、Service の response も返らない。
 
 検証項目: 負の ``src_leaf_size`` は ``load_config`` の段階で ERROR を出して
@@ -28,6 +29,7 @@ import launch
 import launch_ros.actions
 import launch_testing
 import launch_testing.actions
+import launch_testing.markers
 import launch_testing.asserts
 import pytest
 
@@ -39,9 +41,11 @@ TARGET_TOPIC_NAME = "/_bbs3d_ros2_test/negative_leaf_target"
 NEGATIVE_LEAF = -1.0
 EXPECTED_ERROR_SUBSTRING = "src_leaf_size must be"
 LOG_WAIT_TIMEOUT_SEC = 15.0
+SHUTDOWN_WAIT_TIMEOUT_SEC = 10.0
 
 
 @pytest.mark.launch_test
+@launch_testing.markers.keep_alive
 def generate_test_description():
     text = FIXTURE_YAML.read_text().replace(
         "__TARGET_CLOUD_TOPIC__", TARGET_TOPIC_NAME
@@ -66,12 +70,20 @@ def generate_test_description():
 
 
 class TestNegativeLeafSizeErrorLog(unittest.TestCase):
-    def test_error_log_appears(self, proc_output, node, tmp_yaml):
+    def test_error_log_appears(self, proc_output, proc_info, node, tmp_yaml):
         proc_output.assertWaitFor(
             EXPECTED_ERROR_SUBSTRING,
             process=node,
             timeout=LOG_WAIT_TIMEOUT_SEC,
         )
+        # ノードが自分で exit 1 するまで待ってから抜ける。ERROR を見た直後に
+        # 抜けると、launch_testing の shutdown(SIGINT)が自発終了より先に
+        # 届いて exit code が -2 になることがある。待つ間にプロセスが終了しても
+        # launch が止まらないよう、generate_test_description に keep_alive を
+        # 付けている(付けないと "Processes under test stopped before tests
+        # completed" で落ちる)。
+        proc_info.assertWaitForShutdown(
+            process=node, timeout=SHUTDOWN_WAIT_TIMEOUT_SEC)
 
 
 @launch_testing.post_shutdown_test()

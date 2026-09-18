@@ -134,6 +134,7 @@ if(BUILD_TESTING)
   add_launch_test(test/test_src_cloud_leaf_warning.py TIMEOUT 90)
   add_launch_test(test/test_cpu_num_threads.py TIMEOUT 30)
   add_launch_test(test/test_negative_leaf_size.py TIMEOUT 30)
+  add_launch_test(test/test_invalid_config_values.py TIMEOUT 120)
 endif()
 
 ament_auto_package(

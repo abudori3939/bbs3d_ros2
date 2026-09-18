@@ -267,7 +267,7 @@ launch / rviz / config 設定のみの変更。TDD 対象外。
 - [x] テスト: `test/test_backend_config.py`(`backend: "cpu"` 指定で `3D-BBS backend: CPU` ログ)、`test/test_backend_invalid_value.py`(不正値で ERROR ログ + exit 1)。どちらも topic モード fixture を使うため PCD 不要。GPU 指定 × CPU のみビルドのケースはビルド構成で結果が反転するため自動テストには含めず手動確認(ERROR + exit 1 を確認済み)。
 - [x] ドキュメント: README(対応環境 / `-DBUILD_CUDA=OFF` / `sudo ldconfig` / 設定表 / トラブルシューティング)、`config/bbs3d_ros2.yaml`、CLAUDE.md を更新。
 - [ ] **未対応(将来 follow-up)**:
-  - CPU 実装の `set_num_threads`(上流 default 4 固定)を yaml から設定可能にする。CPU で実機性能を出すには実質必要。
+  - ~~CPU 実装の `set_num_threads`(上流 default 4 固定)を yaml から設定可能にする。CPU で実機性能を出すには実質必要。~~ → Step 13 で `cpu_num_threads` として対応済み。
   - GPU 実装側の回帰確認。実装者の開発機に GPU が無いため、GPU ビルドは未検証(コンパイル・動作ともメンテナ環境での確認が必要)。
   - `backend: "auto"` の判定はビルド時のみ。GPU 機でビルドしたバイナリを GPU の見えない環境(`--gpus` 無しコンテナ等)で動かすと GPU 実装のまま起動して CUDA 側で落ちる。`Auto` 分岐に `cudaGetDeviceCount` の実行時プローブを入れて CPU にフォールバックする案がある(現状は README で注意喚起のみ)。
   - `GpuBackend` は double インタフェースからの float 変換で target 点群 1 本分の一時領域を確保する(`set_src_points` も localize ごとに 1 本)。実行時切替と引き換えのコストで、巨大地図ではピークメモリが増える。気になる場合は node 側で double 配列を早期解放するか、GPU 専用ビルドで float 直渡しにする最適化が候補。
@@ -300,7 +300,7 @@ Step 11 マージ後、topic のみの運用(`pcl_ros pcd_to_pointcloud` + CPU �
   - `sanitize_cloud()` を `run_localization` の前処理に適用。落とした点数を WARN に出し、全点が非有限なら `"source cloud has no finite points"` を返す(BBS3D に NaN を渡さない)。
   - `min_feasible_leaf_size()` で `src_leaf_size` 過小を先回り判定し、外形と提案値を WARN に出す。PCL は超過時に間引きを**素通しする**ため、無警告のまま数百万点が候補変換ごとの O(N_src) スコア計算に載るのを防ぐ。
   - downsample / crop の結果 0 点になった場合のガード `"source cloud is empty after filtering"` を追加(空点群は score threshold が 0 になり無意味な解を返しうる)。
-- [x] **13-3 CPU 実装のスレッド数を yaml 化**: `cpu_num_threads`(default `4` = 上流 `cpu::BBS3D` の既定、`1` 未満は ERROR + 起動失敗)。Step 11 の「未対応(将来 follow-up)」の 1 件目。`BbsBackend` に `virtual std::optional<int> set_num_threads(int)`(default は nullopt を返す no-op)を追加し、`CpuBackend` だけ override。**戻り値で「適用されたか」を判定**して起動ログを `3D-BBS backend: CPU (num_threads=N)` に拡張する(`name()` の文字列比較を避けるため)。GPU 実装は該当 API を持たないので従来どおり `3D-BBS backend: GPU`。スレッド数は外から観測できないため、ログに出すことをテスト可能性の担保として仕様に含めた。
+- [x] **13-3 CPU 実装のスレッド数を yaml 化**: `cpu_num_threads`(default `4` = 上流 `cpu::BBS3D` の既定、`1` 未満は ERROR + 起動失敗)。Step 11 の「未対応(将来 follow-up)」の 1 件目。`BbsBackend` に `virtual bool set_num_threads(int)`(default は何もせず false)を追加し、`CpuBackend` だけ override して true を返す。**戻り値で「スレッド数を持つ実装か」を判定**して起動ログを `3D-BBS backend: CPU (num_threads=N)` に拡張する(`name()` の文字列比較を避けるため)。上流 `cpu::BBS3D` に getter が無いので「実際に反映されたか」までは確かめられない。当初は `std::optional<int>` を返していたが、引数をそのまま返すだけで `bool` と情報量が同じだったため、レビュー指摘を受けて `bool` に変更した。GPU 実装は該当 API を持たないので従来どおり `3D-BBS backend: GPU`。スレッド数は外から観測できないため、ログに出すことをテスト可能性の担保として仕様に含めた。
 - [x] テスト(いずれも topic モード fixture を使うため **PCD 不要**):
   - `test/test_src_qos_config.py` — `get_subscriptions_info_by_topic` で lidar sub の QoS を assert。lidar topic 名はテスト専用に差し替え(他テストのノードが同名を subscribe していると複数件返るため)。
   - `test/test_src_cloud_nan.py` — 全点 NaN の source で Trigger が `"source cloud has no finite points"` を返すこと + 混在時に `Dropped N non-finite points` が出ること。
@@ -308,14 +308,22 @@ Step 11 マージ後、topic のみの運用(`pcl_ros pcd_to_pointcloud` + CPU �
   - `test/test_cpu_num_threads.py` — `cpu_num_threads: 3` で起動ログが `3D-BBS backend: CPU (num_threads=3)` になること。
 - [x] ドキュメント: README(設定表 3 行、source QoS と `cpu_num_threads` の使い方、Service reason の追加、起動ログの表記)、`config/bbs3d_ros2.yaml`(Optional セクションにコメントアウトで追記)。
 - [x] **PR #14 レビュー対応**(独立レビューエージェントによる指摘):
-  - **負の leaf size でノードが SIGFPE 即死する経路を塞いだ**。source 側の分岐は上流由来の `if (src_leaf_size != 0.0f)` で負値も通るのに対し target 側は `> 0.0f` でガードされており、Step 13 で source から `min_feasible_leaf_size()` に負値が届くようになっていた。`1/leaf < 0` → 1 軸目で `d == 0` → `product == 0` → 2 軸目の `kMaxCells / product` で整数ゼロ除算(切り出して再現、`exit=136`)。`load_config` で `tar_leaf_size` / `src_leaf_size` の負値を ERROR + 起動失敗にし、ヘルパ冒頭にも `if (!(leaf > 0.0f)) return nullopt;` を置いた。TDD(RED: 負値 yaml で起動してしまい exit 0 → GREEN)。テスト `test/test_negative_leaf_size.py`。
+  - **負の leaf size でノードが SIGFPE 即死する経路を塞いだ**。source 側の分岐は上流由来の `if (src_leaf_size != 0.0f)` で負値も通るのに対し target 側は `> 0.0f` でガードされており、Step 13 で source から `min_feasible_leaf_size()` に負値が届くようになっていた。`1/leaf < 0` のとき、**x 方向の広がり `extent[0]` が `[|leaf|, 2|leaf|)` に入ると** 1 軸目で `d == 0` → `product == 0` になり、2 軸目の `kMaxCells / product` で整数ゼロ除算(切り出して再現、`exit=136`)。`load_config` で `tar_leaf_size` / `src_leaf_size` の負値を ERROR + 起動失敗にし、ヘルパ冒頭にも `if (!(leaf > 0.0f)) return nullopt;` を置いた。TDD(RED: 負値 yaml で起動してしまい exit 0 → GREEN)。テスト `test/test_negative_leaf_size.py`。
+    **上流互換の挙動差分**: 負の `tar_leaf_size` は従来、pcd モードでは上流 `pciof::load_tar_clouds` の `ApproximateVoxelGrid` が実質 |leaf| で間引いて動いており、topic モードでは `> 0.0f` の分岐に入らず間引き off として動いていた。どちらも**起動失敗に変わる**(ERROR ログ + exit 1 で明示的に失敗する)。
   - **`test_src_cloud_nan.py` の (b) が偽 GREEN だったのを修正**。全点 NaN 点群(a)と混在点群(b)の NaN 数が同じ 3 点だったため、(a) が出す `Dropped 3 non-finite points` の 1 行で (b) の assert も満たされ、**(b) の点群が届かなくても PASS** していた。(a) を 2 点に変えて数を分け、期待文字列を完全形にし、(b) では response も assert するようにした。
   - **`test_src_cloud_leaf_warning.py` の assert を完全一致に**。`"src_leaf_size"` と `"too small"` を別々に待つと、後者は target 側 WARN でも満たせるため fixture 次第で偽 GREEN 化する。`src_leaf_size 0.001 is too small for this cloud` の 1 本で待つ。
   - **README のトラブルシューティングに source 側の行を追加**。`... is too small for this map`(target)と `... for this cloud`(source)、`Dropped N ... target cloud` と `... source cloud` は見た目が近く原因が別なので、行頭に **target** / **source** を明示し、`"source cloud is empty after filtering"` と負値 ERROR の行も足した。
+- [x] **PR #14 レビュー残課題の対応**(マージ後の follow-up PR):
+  - **不安定テストの修正**: `test_backend_invalid_value.py` / `test_negative_leaf_size.py` / `test_bad_pcd_path.py` は「ERROR ログを待つ → post_shutdown で exit code 1 を確認」という構造で、ときどき exit code -2(SIGINT)で落ちていた(修正前 30 回連続実行で 1/30・6/30・0/30)。原因は 2 つの競合で、(1) ERROR を見た直後に active テストを抜けると launch_testing の shutdown(SIGINT)がノードの自発終了より先に届くことがある、(2) 逆にノードの終了を active テスト内で待つと、`launch_service.run(shutdown_when_idle=True)` がプロセス終了の瞬間に戻り「テスト完了前にプロセスが止まった」と判定される(試したところ 11/30・8/30・14/30 に悪化)。**`proc_info.assertWaitForShutdown` で終了を待つ + `@launch_testing.markers.keep_alive` で idle 時の自動 shutdown を止める**の組合せで両方を解消(修正後 100 回連続実行で 3 本とも 0/100)。
+  - **不正値テストの追加**: `test/test_invalid_config_values.py`。`launch_testing.parametrize` で 1 ファイルから `cpu_num_threads: 0` / `src_cloud_qos_reliability` / `src_cloud_qos_durability` / `target_cloud_qos_reliability` / `target_cloud_qos_durability` の不正値を起動し、それぞれ ERROR ログ + exit code 1 を確認する。既存の検証を守るテストなので追加時点から PASS(1 ケースを正しい値に差し替えると落ちることを確認済み)。
+  - `set_num_threads` の戻り値を `bool` に変更(13-3 の記述を参照)。ログ文言は変えていない。
 - [ ] **未対応(将来 follow-up)**:
-  - `test_backend_invalid_value.py` が全体実行時にまれに `exited with code -2`(SIGINT)で落ちる。ノードが exit 1 する前に launch_testing の shutdown が届くレースで、Step 13 の変更とは無関係の既存 flake。
-  - PR #14 レビューの Should fix 残(本 PR では未対応): `std::optional<int> set_num_threads` の戻り値は引数のエコーで `bool` と情報量が同じ(上流 `cpu::BBS3D` に getter が無いため「実際に適用されたか」は保証できない)。`cpu_num_threads < 1` と `src_cloud_qos_*` の不正値は ERROR + 起動失敗の仕様だが launch テストが無い(`test_target_qos_config.py` の不正値も同様なのでまとめて 1 PR)。
-- DoD: source に地図規模 / latch publish の点群を与えても、QoS で受け取れて、NaN と leaf size 過小がログから分かる ✅(launch テスト 14/14 PASS)。
+  - README: source を `transient_local` にすると通常の volatile な LiDAR ドライバと接続されず 1 フレームも届かなくなる旨の注意(地図を source にする構成専用、実センサに戻すときは default に戻す)。`reliable` + `KeepLast(50)` を高レート LiDAR に付けたときの publisher 側バックプレッシャも同様。
+  - source 側の leaf 過小 WARN は localize 1 回ごとに出る(target 側は rebuild ごと)。トリガを連打する運用ではログが埋まるので `RCLCPP_WARN_THROTTLE` 等を検討。
+  - GPU 実装に解決された状態で `cpu_num_threads` を既定以外に書いても黙って無視される(README には記載あり)。既定以外のときに INFO を 1 行出す / 上限チェックを検討。
+  - NaN の leaf size を弾いていない。`< 0.0f` を `!(x >= 0.0f)`(必要なら `std::isfinite` も)にすれば、`.nan` を書いた場合に PCL 内部で起きる NaN → int 変換の UB も同じ ERROR で止められる(本 Step 以前からの既存挙動)。
+  - コードの細部: `get_or` の int 版の引数に付いた top-level `const`(文字列版と不揃い)、メンバ名の末尾 `_` の有無の揺れ(`cpu_num_threads` と `src_cloud_qos_reliability_`)。
+- DoD: source に地図規模 / latch publish の点群を与えても、QoS で受け取れて、NaN と leaf size 過小がログから分かる ✅(launch テスト 15/15 PASS)。
 
 ---
 

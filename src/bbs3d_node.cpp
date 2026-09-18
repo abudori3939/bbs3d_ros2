@@ -519,13 +519,12 @@ Bbs3dNode::Bbs3dNode(const rclcpp::NodeOptions & options)
       "Rebuild where CUDA and libgpu_bbs3d.so are available, or set backend: 'cpu'.");
     throw std::runtime_error("gpu backend unavailable");
   }
-  // Step 13: スレッド数を持つ実装(CPU)なら適用値をログに含める。持たない
-  // 実装(GPU)は nullopt を返すので従来どおりの 1 行になる。
-  const auto applied_num_threads = bbs3d_->set_num_threads(cpu_num_threads);
-  if (applied_num_threads) {
+  // Step 13: スレッド数を持つ実装(CPU)なら設定値をログに含める。持たない
+  // 実装(GPU)は false を返すので従来どおりの 1 行になる。
+  if (bbs3d_->set_num_threads(cpu_num_threads)) {
     RCLCPP_INFO(
       get_logger(), "3D-BBS backend: %s (num_threads=%d)",
-      bbs3d_->name(), *applied_num_threads);
+      bbs3d_->name(), cpu_num_threads);
   } else {
     RCLCPP_INFO(get_logger(), "3D-BBS backend: %s", bbs3d_->name());
   }
