@@ -317,13 +317,13 @@ Step 11 マージ後、topic のみの運用(`pcl_ros pcd_to_pointcloud` + CPU �
   - **不安定テストの修正**: `test_backend_invalid_value.py` / `test_negative_leaf_size.py` / `test_bad_pcd_path.py` は「ERROR ログを待つ → post_shutdown で exit code 1 を確認」という構造で、ときどき exit code -2(SIGINT)で落ちていた(修正前 30 回連続実行で 1/30・6/30・0/30)。原因は 2 つの競合で、(1) ERROR を見た直後に active テストを抜けると launch_testing の shutdown(SIGINT)がノードの自発終了より先に届くことがある、(2) 逆にノードの終了を active テスト内で待つと、`launch_service.run(shutdown_when_idle=True)` がプロセス終了の瞬間に戻り「テスト完了前にプロセスが止まった」と判定される(試したところ 11/30・8/30・14/30 に悪化)。**`proc_info.assertWaitForShutdown` で終了を待つ + `@launch_testing.markers.keep_alive` で idle 時の自動 shutdown を止める**の組合せで両方を解消(修正後 100 回連続実行で 3 本とも 0/100)。
   - **不正値テストの追加**: `test/test_invalid_config_values.py`。`launch_testing.parametrize` で 1 ファイルから `cpu_num_threads: 0` / `src_cloud_qos_reliability` / `src_cloud_qos_durability` / `target_cloud_qos_reliability` / `target_cloud_qos_durability` の不正値を起動し、それぞれ ERROR ログ + exit code 1 を確認する。既存の検証を守るテストなので追加時点から PASS(1 ケースを正しい値に差し替えると落ちることを確認済み)。
   - `set_num_threads` の戻り値を `bool` に変更(13-3 の記述を参照)。ログ文言は変えていない。
-- [ ] **未対応(将来 follow-up)**:
-  - README: source を `transient_local` にすると通常の volatile な LiDAR ドライバと接続されず 1 フレームも届かなくなる旨の注意(地図を source にする構成専用、実センサに戻すときは default に戻す)。`reliable` + `KeepLast(50)` を高レート LiDAR に付けたときの publisher 側バックプレッシャも同様。
-  - source 側の leaf 過小 WARN は localize 1 回ごとに出る(target 側は rebuild ごと)。トリガを連打する運用ではログが埋まるので `RCLCPP_WARN_THROTTLE` 等を検討。
-  - GPU 実装に解決された状態で `cpu_num_threads` を既定以外に書いても黙って無視される(README には記載あり)。既定以外のときに INFO を 1 行出す / 上限チェックを検討。
-  - NaN の leaf size を弾いていない。`< 0.0f` を `!(x >= 0.0f)`(必要なら `std::isfinite` も)にすれば、`.nan` を書いた場合に PCL 内部で起きる NaN → int 変換の UB も同じ ERROR で止められる(本 Step 以前からの既存挙動)。
-  - コードの細部: `get_or` の int 版の引数に付いた top-level `const`(文字列版と不揃い)、メンバ名の末尾 `_` の有無の揺れ(`cpu_num_threads` と `src_cloud_qos_reliability_`)。
-- DoD: source に地図規模 / latch publish の点群を与えても、QoS で受け取れて、NaN と leaf size 過小がログから分かる ✅(launch テスト 15/15 PASS)。
+- [x] **レビュー残課題 5 件**(PR #14 / #15 で別 PR に回したもの):
+  - **source を `transient_local` にする設定の注意**を README に追加。DDS のマッチング規則で通常の volatile な LiDAR ドライバと繋がらなくなること、`reliable` + `KeepLast(50)` を高レート LiDAR に付けたときの publisher 側の待ち、実センサに戻すときは既定値に戻すこと。
+  - **source 側 leaf 過小 WARN を 10 秒に 1 回に間引く**(`RCLCPP_WARN_THROTTLE`)。target 側と違って localize のたびに評価されるため、トリガを連打するとログが埋まっていた。TDD(RED: 10 秒以内の 2 回の localize で WARN が 2 回 → GREEN: 1 回)。テストは `test_src_cloud_leaf_warning.py` に追加し、2 回とも前処理を通ったこと(`Localize: start` × 2)を先に確かめて偽 GREEN を防ぐ。
+  - **`cpu_num_threads` がハードウェアスレッド数を超えたら WARN**(起動は継続。コンテナの CPU 制限などで `hardware_concurrency()` が実態とずれる場合があるため ERROR にはしない)。TDD(RED: `cpu_num_threads: 9999` で WARN が出ない → GREEN)。テスト `test_cpu_num_threads_exceeds.py`。GPU 実装で既定以外の値が無視されるときは INFO `cpu_num_threads N is ignored by the GPU backend` を出す(**この環境は CPU のみのビルドで GPU 経路を通せないため自動テストなし**。Step 11 の GPU 指定と同じ扱い)。
+  - **NaN の leaf size も起動失敗にする**。判定を `< 0.0f` から `!(x >= 0.0f)` に変更(NaN との比較はすべて false なので、これで NaN も弾ける)。inf はクラッシュしないため既存挙動のまま通す。TDD(RED: `.nan` で普通に起動して exit 0 → GREEN)。`test_invalid_config_values.py` に 2 ケース追加。fixture に既にあるキー(leaf size)は**追記ではなく行ごと置換**するようにした(追記すると YAML のキー重複になり NaN が読まれない)。
+  - **コードの細部**: `get_or` の int 版の top-level `const` を削除。メンバ名の `_` は改名せず、方針をヘッダのコメントに明記した(yaml キーと 1 対 1 のメンバは上流移植に合わせて `_` 無し、変換後の enum を持つ QoS の 4 つだけ `_` 付き)。
+- DoD: source に地図規模 / latch publish の点群を与えても、QoS で受け取れて、NaN と leaf size 過小がログから分かる ✅(launch テスト 17/17 PASS)。
 
 ---
 
