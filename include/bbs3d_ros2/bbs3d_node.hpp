@@ -119,6 +119,9 @@ private:
   std::unique_ptr<BbsBackend> bbs3d_;
 
   // Config
+  // 命名: yaml キーと 1 対 1 のメンバは上流 ros2_test からの移植に合わせて末尾
+  // `_` 無し(yaml キーで grep できるように)。例外は QoS の 4 つで、yaml の文字列
+  // ではなく変換後の rclcpp enum を持つため、他の状態メンバと同じく `_` 付き。
   std::string tar_path;
   std::string lidar_topic_name, imu_topic_name;
   // Step 9: yaml で変更可能な出力 / トリガートピック名。yaml に当該キーが

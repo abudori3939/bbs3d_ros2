@@ -8,8 +8,13 @@ source 側には無い。地図同士の位置合わせのように source が�
 数百万点が間引かれないまま BBS3D に渡り、候補変換ごとに O(N_src) のスコア
 計算が走って実質終わらなくなる。しかも何の診断も出ない。
 
-検証項目: `src_leaf_size` が過小なとき、ノード自身が WARN で
-「leaf size が小さすぎて downsample がスキップされる」ことを知らせること。
+検証項目:
+
+(a) `src_leaf_size` が過小なとき、ノード自身が WARN で
+    「leaf size が小さすぎて downsample がスキップされる」ことを知らせること。
+(b) この WARN は target 側(voxelmap 再構築ごと)と違って localize のたびに
+    評価されるため、トリガを連打するとログが埋まる。10 秒以内の 2 回目の
+    localize では WARN を**繰り返さない**こと(throttle)。
 
 fixture の `src_leaf_size` を 0.001 に置換し、3 軸それぞれ 2000 m 離れた点を
 source として送ることで、PCL と同じ判定式 ((2000/0.001)+1)^3 ≈ 8.0e18 >
@@ -56,6 +61,7 @@ EXPECTED_WARN_LOG = (
     f"src_leaf_size {TOO_SMALL_LEAF:g} is too small for this cloud"
 )
 EXPECTED_REBUILT_SUBSTRING = "Target voxelmap rebuilt"
+LOCALIZE_START_LOG = "Localize: start"
 
 DISCOVERY_TIMEOUT_SEC = 20.0
 SERVICE_AVAILABLE_TIMEOUT_SEC = 15.0
@@ -215,15 +221,42 @@ class TestSrcLeafSizeTooSmallWarning(unittest.TestCase):
 
         self.src_pub.publish(_make_wide_source_cloud())
         self._spin_for(SETTLE_SEC)
+
+        # (a) 1 回目の localize で WARN が出る。
+        self._call_localize(client)
+        proc_output.assertWaitFor(
+            EXPECTED_WARN_LOG, process=node,
+            timeout=LOG_WAIT_TIMEOUT_SEC)
+
+        # (b) 直後(10 秒以内)の 2 回目では WARN が増えない。Service の
+        # response が返った時点で 2 回目の前処理は終わっている。
+        self._call_localize(client)
+        output = self._node_output(proc_output, node)
+        # 2 回目も前処理を通って探索に入ったことを確認する(途中で弾かれて
+        # WARN の分岐に届いていないだけ、という偽 GREEN を防ぐ)。
+        self.assertEqual(
+            output.count(LOCALIZE_START_LOG), 2,
+            f"Expected both localize calls to reach the search "
+            f"({LOCALIZE_START_LOG!r} x2)",
+        )
+        self.assertEqual(
+            output.count(EXPECTED_WARN_LOG), 1,
+            "The src_leaf_size warning must be throttled: expected it once "
+            "for two localize calls within 10 s",
+        )
+
+    def _call_localize(self, client):
         future = client.call_async(Trigger.Request())
         rclpy.spin_until_future_complete(
             self.observer_node, future, timeout_sec=RESPONSE_TIMEOUT_SEC
         )
         self.assertIsNotNone(future.result(), "Service did not respond")
 
-        proc_output.assertWaitFor(
-            EXPECTED_WARN_LOG, process=node,
-            timeout=LOG_WAIT_TIMEOUT_SEC)
+    @staticmethod
+    def _node_output(proc_output, node):
+        return "".join(
+            event.text.decode(errors="replace") for event in proc_output[node]
+        )
 
 
 @launch_testing.post_shutdown_test()
